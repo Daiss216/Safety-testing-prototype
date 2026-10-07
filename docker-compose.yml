@@ -1,0 +1,59 @@
+version: "3.9"
+
+# BAYORA POC - secure adversarial AI testing infrastructure
+# Three logical tenants (red / blue / client-LLM) on shared infra,
+# isolated by per-test crypto keys, network policies and hardening flags.
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: bayora
+      POSTGRES_PASSWORD: bayora
+      POSTGRES_DB: bayora
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [bayora]
+    mem_limit: 512m # cgroup resource governance
+    cpus: 0.5
+
+  ollama:
+    image: ollama/ollama:latest
+    networks: [bayora]
+    # Client-LLM tenant: reachable ONLY inside the bayora network.
+    # No published port = red/blue cannot hit it directly.
+    mem_limit: 4g
+    cpus: 2.0
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://bayora:bayora@db:5432/bayora
+      OLLAMA_HOST: http://ollama:11434
+      BAYORA_MODEL: llama3.2:3b
+      BAYORA_SECRET: dev-secret-change-me
+    ports:
+      - "8000:8000"
+    depends_on: [db, ollama]
+    networks: [bayora]
+    #infrastructure hardening (Security Core)
+    cap_drop: [ALL]
+    security_opt:
+      - seccomp=./backend/seccomp-bayora.json
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:80"
+    depends_on: [backend]
+    networks: [bayora]
+
+networks:
+  bayora:
+    driver: bridge # isolated bridge = segmentation
+
+volumes:
+  pgdata:
