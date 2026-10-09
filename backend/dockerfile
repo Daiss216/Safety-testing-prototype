@@ -1,9 +1,41 @@
-FROM python:3.11-slim
-RUN useradd -m bayora
-WORKDIR /app
+# Stage 1: Build dependencies
+FROM python:3.11-slim AS builder
+
+ENV VIRTUAL_ENV=/opt/venv
+RUN python -m venv "$VIRTUAL_ENV"
+
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+WORKDIR /build
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
+
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
+
+# Stage 2: Production runtime
+FROM python:3.11-slim AS runtime
+
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Create a non-root user
+RUN useradd --create-home --no-log-init --uid 10001 bayora
+
+WORKDIR /app
+
+# Copy installed dependencies from the builder stage
+COPY --from=builder /opt/venv /opt/venv
+
+# Copy application files with appropriate ownership
+COPY --chown=bayora:bayora . .
+
+# Run as a non-root user
 USER bayora
+
 EXPOSE 8000
+
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
