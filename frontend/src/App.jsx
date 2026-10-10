@@ -230,13 +230,13 @@ export default function App() {
           <h1 className="text-3xl font-bold">
             <span className="text-cyan-400">BAYORA</span>{" "}
             <span className="text-slate-300 text-xl">
-              | Secure Adversarial AI Testing — PoC
+              | Secure Adversarial AI Testing
             </span>
           </h1>
           <p className="text-slate-400 text-sm mt-1">
-            One browser session, one team token. Red, blue, and the model run
-            in separate containers. Replies are hashed, not shown; Ollama cache
-            is flushed when the evaluation changes.
+            One browser session, one team token. Red, blue, and the model run in
+            separate containers. Replies are hashed, not shown; Ollama cache is
+            flushed when the evaluation changes.
           </p>
         </div>
         <div className="flex gap-2">
@@ -282,8 +282,8 @@ export default function App() {
             <b className="text-yellow-400">Handoff — test {handoff.testId}</b>
             <span className="text-slate-300">
               {" "}
-              Issue one team at a time. The API never returns both tokens in
-              one response; this page never keeps more than one revealed token.
+              Issue one team at a time. The API never returns both tokens in one
+              response; this page never keeps more than one revealed token.
             </span>
           </p>
           <div className="flex flex-wrap gap-2">
@@ -307,7 +307,9 @@ export default function App() {
               <CopyField
                 label={`${revealed.team} token — give only to ${revealed.team}`}
                 value={revealed.token}
-                tone={revealed.team === "red" ? "text-red-400" : "text-blue-400"}
+                tone={
+                  revealed.team === "red" ? "text-red-400" : "text-blue-400"
+                }
               />
               <button className="btn btn-cyan" onClick={enterRevealed}>
                 Enter {revealed.team.toUpperCase()} console
@@ -362,8 +364,8 @@ export default function App() {
           <span className="text-slate-300">
             {" "}
             — test {testId}. Other-team payloads stay sealed until conclude.
-            Execute returns labels, a reply hash, and cache-flush metadata —
-            not model text.
+            Execute returns labels, a reply hash, and cache-flush metadata — not
+            model text.
           </span>
         </div>
       )}
@@ -476,7 +478,7 @@ export default function App() {
                 ✔ chain intact (SHA-256 + HMAC verified)
               </span>
             ) : (
-              <span className="text-red-400">⛔ TAMPERING DETECTED</span>
+              <span className="text-red-400"> TAMPERING DETECTED</span>
             )}
           </h2>
           <table className="w-full text-xs">
