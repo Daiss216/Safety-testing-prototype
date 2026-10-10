@@ -27,12 +27,13 @@ const outcomeColors = {
   benign_or_unclear: "#3dd6c4",
 };
 
-async function api(path, { token = "", ...opts } = {}) {
+async function api(path, { token = "", operatorToken = "", ...opts } = {}) {
   const res = await fetch(`${API}${path}`, {
     ...opts,
     headers: {
       "Content-Type": "application/json",
       ...(token ? { "X-Token": token } : {}),
+      ...(operatorToken ? { "X-Operator-Token": operatorToken } : {}),
       ...(opts.headers || {}),
     },
   });
@@ -67,8 +68,13 @@ function CopyField({ label, value, tone }) {
 }
 
 export default function App() {
+  const [operatorToken, setOperatorToken] = useState(
+    () => sessionStorage.getItem("bayora-operator") || "dev-operator-change-me",
+  );
   const [session, setSession] = useState(null);
   const [handoff, setHandoff] = useState(null);
+  const [revealed, setRevealed] = useState(null);
+  const [issued, setIssued] = useState({});
   const [joinId, setJoinId] = useState("");
   const [joinTeam, setJoinTeam] = useState("red");
   const [joinToken, setJoinToken] = useState("");
@@ -101,34 +107,52 @@ export default function App() {
     run(async () => {
       const name = prompt("Evaluation name?", "demo-evaluation") || "demo";
       const r = await api("/tests", {
+        operatorToken,
         method: "POST",
         body: JSON.stringify({ name }),
       });
       leaveConsole();
-      setHandoff({
-        testId: r.test_id,
-        red: r.red_token,
-        blue: r.blue_token,
-      });
+      setHandoff({ testId: r.test_id });
+      setRevealed(null);
+      setIssued({});
       return {
         test_id: r.test_id,
-        note: "Tokens are shown once on the handoff card. This browser will keep only the team you enter as.",
+        note: "No team tokens in this response. Issue red and blue one at a time.",
       };
     });
 
-  function enterTeam(chosen, creds) {
+  const issueTeam = (chosen) =>
+    run(async () => {
+      const r = await api(`/tests/${handoff.testId}/tokens`, {
+        operatorToken,
+        method: "POST",
+        body: JSON.stringify({ team: chosen }),
+      });
+      setRevealed({ team: r.team, token: r.token });
+      setIssued((prev) => ({ ...prev, [chosen]: true }));
+      return {
+        test_id: r.test_id,
+        team: r.team,
+        note: "Only this team's token is on screen. Copy it before issuing the other.",
+      };
+    });
+
+  function enterRevealed() {
+    if (!handoff || !revealed) return;
     setSession({
-      testId: creds.testId,
-      team: chosen,
-      token: creds[chosen],
+      testId: handoff.testId,
+      team: revealed.team,
+      token: revealed.token,
     });
     setHandoff(null);
+    setRevealed(null);
+    setIssued({});
     setPayload("");
     setLedger(null);
     setOutput({
-      test_id: creds.testId,
-      team: chosen,
-      note: `This session holds the ${chosen} token only.`,
+      test_id: handoff.testId,
+      team: revealed.team,
+      note: `This session holds the ${revealed.team} token only.`,
     });
   }
 
@@ -186,14 +210,18 @@ export default function App() {
 
   async function refreshStats() {
     try {
-      setStats(await api("/stats"));
+      const r = await api("/stats", {
+        token,
+        operatorToken: session ? "" : operatorToken,
+      });
+      setStats(r);
     } catch {
-      /* ignore */
+      setStats(null);
     }
   }
   useEffect(() => {
     refreshStats();
-  }, []);
+  }, [token, operatorToken, session]);
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
@@ -216,11 +244,36 @@ export default function App() {
               Leave console
             </button>
           )}
-          <button onClick={createTest} disabled={busy} className="btn btn-cyan">
+          <button
+            onClick={createTest}
+            disabled={busy || !operatorToken}
+            className="btn btn-cyan"
+          >
             + New Evaluation
           </button>
         </div>
       </div>
+
+      {!session && (
+        <div className="card space-y-2">
+          <span className="label">Operator token</span>
+          <input
+            className="input font-mono"
+            type="password"
+            autoComplete="off"
+            value={operatorToken}
+            onChange={(e) => {
+              setOperatorToken(e.target.value);
+              sessionStorage.setItem("bayora-operator", e.target.value);
+            }}
+          />
+          <p className="text-slate-500 text-xs">
+            Required to create evaluations, list tests, and view global stats.
+            Must match <code>BAYORA_OPERATOR_TOKEN</code>. Demo default is
+            prefilled; change it in Compose for anything real.
+          </p>
+        </div>
+      )}
 
       {handoff && (
         <div className="card border-yellow-700 bg-yellow-950/30 space-y-3">
@@ -228,37 +281,38 @@ export default function App() {
             <b className="text-yellow-400">Handoff — test {handoff.testId}</b>
             <span className="text-slate-300">
               {" "}
-              Copy each token to its team (second browser or teammate), then
-              enter <em>one</em> console. The other token is dropped from this
-              page.
+              Issue one team at a time. The API never returns both tokens in
+              one response; this page never keeps more than one revealed token.
             </span>
           </p>
-          <div className="grid md:grid-cols-2 gap-3">
-            <CopyField
-              label="Red token — give only to red"
-              value={handoff.red}
-              tone="text-red-400"
-            />
-            <CopyField
-              label="Blue token — give only to blue"
-              value={handoff.blue}
-              tone="text-blue-400"
-            />
-          </div>
           <div className="flex flex-wrap gap-2">
             <button
               className="btn btn-red"
-              onClick={() => enterTeam("red", handoff)}
+              disabled={busy || issued.red}
+              onClick={() => issueTeam("red")}
             >
-              Enter RED console
+              {issued.red ? "Red already issued" : "Issue RED token"}
             </button>
             <button
               className="btn btn-blue"
-              onClick={() => enterTeam("blue", handoff)}
+              disabled={busy || issued.blue}
+              onClick={() => issueTeam("blue")}
             >
-              Enter BLUE console
+              {issued.blue ? "Blue already issued" : "Issue BLUE token"}
             </button>
           </div>
+          {revealed && (
+            <>
+              <CopyField
+                label={`${revealed.team} token — give only to ${revealed.team}`}
+                value={revealed.token}
+                tone={revealed.team === "red" ? "text-red-400" : "text-blue-400"}
+              />
+              <button className="btn btn-cyan" onClick={enterRevealed}>
+                Enter {revealed.team.toUpperCase()} console
+              </button>
+            </>
+          )}
         </div>
       )}
 

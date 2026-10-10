@@ -19,6 +19,8 @@ import uuid
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Literal
+
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from cryptography.fernet import Fernet
@@ -34,16 +36,29 @@ load_dotenv()
 TEST_SECRET = os.getenv("BAYORA_SECRET")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST")
 MODEL = os.getenv("BAYORA_MODEL")
+OPERATOR_TOKEN = os.getenv("BAYORA_OPERATOR_TOKEN", "dev-operator-change-me")
+CORS_ORIGINS = [
+    o.strip()
+    for o in os.getenv(
+        "BAYORA_CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if o.strip()
+]
 
 Base.metadata.create_all(engine)
 
 app = FastAPI(title="Bayora - Secure Adversarial AI Testing")
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-Token", "X-Operator-Token"],
 )
 
 # capability tokens (PoC: in-memory; production: Vault short-TTL tokens)
 TOKENS: dict[str, dict[str, str]] = {}
+ISSUED: dict[str, set[str]] = {}
 
 
 def db() -> Session:
@@ -59,6 +74,27 @@ def key_for(test_id: str) -> bytes:
     cryptographically isolated even if the DB leaks."""
     raw = hashlib.sha256(f"{TEST_SECRET}:{test_id}".encode()).digest()
     return base64.urlsafe_b64encode(raw)
+
+
+def operator_ok(header: str | None) -> bool:
+    if not OPERATOR_TOKEN or not header:
+        return False
+    return hmac.compare_digest(header, OPERATOR_TOKEN)
+
+
+def require_operator(x_operator_token: str | None = Header(default=None)) -> None:
+    if not operator_ok(x_operator_token):
+        raise HTTPException(401, "valid X-Operator-Token required")
+
+
+def test_id_of_token(token: str | None) -> str:
+    if not token:
+        raise HTTPException(401, "missing token")
+    for test_id, teams in TOKENS.items():
+        for tok in teams.values():
+            if hmac.compare_digest(tok, token):
+                return test_id
+    raise HTTPException(401, "invalid token")
 
 
 def team_of(test_id: str, token: str | None) -> str:
@@ -191,12 +227,21 @@ class PayloadIn(BaseModel):
     content: str
 
 
+class IssueTokenIn(BaseModel):
+    team: Literal["red", "blue"]
+
+
 # endpoints
 
 @app.post("/tests")
-def create_test(body: CreateTestIn, s: Session = Depends(db)):
+def create_test(
+    body: CreateTestIn,
+    s: Session = Depends(db),
+    _: None = Depends(require_operator),
+):
     test_id = uuid.uuid4().hex[:12]
     TOKENS[test_id] = {"red": uuid.uuid4().hex, "blue": uuid.uuid4().hex}
+    ISSUED[test_id] = set()
     h, sig, ts, raw = make_entry(GENESIS, "TEST_CREATED", {"name": body.name})
     s.add(Test(id=test_id, name=body.name, created_at=ts, genesis_hash=h))
     s.add(Ledger(
@@ -206,9 +251,31 @@ def create_test(body: CreateTestIn, s: Session = Depends(db)):
     s.commit()
     return {
         "test_id": test_id,
-        "red_token": TOKENS[test_id]["red"],
-        "blue_token": TOKENS[test_id]["blue"],
-        "note": "Hand each token only to the matching team. Server never shows it again.",
+        "note": "Issue red and blue tokens separately via POST /tests/{id}/tokens. This response has neither.",
+    }
+
+
+@app.post("/tests/{test_id}/tokens")
+def issue_team_token(
+    test_id: str,
+    body: IssueTokenIn,
+    s: Session = Depends(db),
+    _: None = Depends(require_operator),
+):
+    get_test(test_id, s)
+    if test_id not in TOKENS:
+        raise HTTPException(401, "unknown test id")
+    issued = ISSUED.setdefault(test_id, set())
+    if body.team in issued:
+        raise HTTPException(409, f"{body.team} token already issued; server will not show it again")
+    issued.add(body.team)
+    log(s, test_id, "TOKEN_ISSUED", {"team": body.team})
+    s.commit()
+    return {
+        "test_id": test_id,
+        "team": body.team,
+        "token": TOKENS[test_id][body.team],
+        "note": "Copy this token to that team only. The other team's token is not in this response.",
     }
 
 
@@ -346,7 +413,10 @@ def get_ledger(test_id: str, x_token: str = Header(None), s: Session = Depends(d
 
 
 @app.get("/tests")
-def list_tests(s: Session = Depends(db)):
+def list_tests(
+    s: Session = Depends(db),
+    _: None = Depends(require_operator),
+):
     return [
         {"test_id": t.id, "name": t.name, "status": t.status, "created_at": t.created_at}
         for t in s.query(Test).all()
@@ -354,12 +424,23 @@ def list_tests(s: Session = Depends(db)):
 
 
 @app.get("/stats")
-def stats(s: Session = Depends(db)):
-    rows = s.query(Ledger).filter_by(event_type="FINDING").all()
+def stats(
+    s: Session = Depends(db),
+    x_token: str | None = Header(default=None),
+    x_operator_token: str | None = Header(default=None),
+):
+    if operator_ok(x_operator_token):
+        scope_id = None
+    else:
+        scope_id = test_id_of_token(x_token)
+    q = s.query(Ledger).filter_by(event_type="FINDING")
+    if scope_id:
+        q = q.filter_by(test_id=scope_id)
+    rows = q.all()
     per_day, outcomes = {}, {"jailbreak_success": 0, "defended": 0, "benign_or_unclear": 0}
     for r in rows:
         f = json.loads(r.data)["data"]
         day = time.strftime("%Y-%m-%d", time.localtime(r.ts))
         per_day[day] = per_day.get(day, 0) + 1
         outcomes[f["result"]] = outcomes.get(f["result"], 0) + 1
-    return {"per_day": per_day, "outcomes": outcomes}
+    return {"scope": scope_id or "all", "per_day": per_day, "outcomes": outcomes}

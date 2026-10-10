@@ -30,6 +30,8 @@ services:
       OLLAMA_HOST: http://ollama:11434
       BAYORA_MODEL: llama3.2:3b
       BAYORA_SECRET: dev-secret-change-me
+      BAYORA_OPERATOR_TOKEN: dev-operator-change-me
+      BAYORA_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
     ports:
       - "8000:8000"
     depends_on: [db, ollama]
