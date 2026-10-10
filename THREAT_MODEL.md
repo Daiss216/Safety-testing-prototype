@@ -24,14 +24,14 @@ Logical tenants on one Docker Compose stack:
 - Blue-team defensive logic before the test concludes
 - Model weights / KV-cache / in-flight prompts (must not leak across tenants)
 - Evaluation findings (integrity: a finding must still be reconstructable)
-- Capability tokens and secrets (`BAYORA_RED_SECRET`, `BAYORA_BLUE_SECRET`, worker tokens, `BAYORA_LEDGER_SECRET`, DB password)
+- Capability tokens and secrets (`BAYORA_RED_SECRET`, `BAYORA_BLUE_SECRET`, worker tokens, ledger Ed25519 private key, DB password)
 
 **Intended security properties (PoC)**
 
 1. Blue cannot **read** red plaintext until conclude (and vice versa).
 2. Neither team can call Ollama directly; only **model-gateway** is on the `llm` network with Ollama.
 3. Postgres is on an **internal** `data` network; the UI cannot resolve `db` or `ollama`.
-4. Every create / upload / execute / conclude / denied-read is appended to a hash-chained, HMAC-signed ledger.
+4. Every create / upload / execute / conclude / denied-read is appended to a SHA-256 hash chain signed with Ed25519. A verifier needs only the public key.
 5. Backend process drops capabilities, uses a seccomp profile, `no-new-privileges`, and a non-root user.
 6. Inference is serialized; the Ollama runner is unloaded when the evaluation id changes so tests do not share a live KV-cache (best-effort; see §5.4).
 
@@ -79,7 +79,7 @@ Out of scope for this PoC: hypervisor escape, malicious Docker daemon, physical 
 | Frontend → Postgres or Ollama | Network membership; db has no published ports | **Enforced** if Compose file is used as-is (see `scripts/network-isolation.sh`) |
 | Red/blue → Ollama without the gateway | Workers not on `llm`; Ollama has no host port | **Enforced** for default Compose |
 | Accidental DB dump of payloads | Fernet ciphertext; key = SHA-256(team secret ‖ `test_id` ‖ team) | **Confidentiality vs stolen DB rows**; red secret does not open blue rows |
-| Silent rewrite of a ledger row | SHA-256 chain + HMAC-SHA256 over canonical JSON | **Detection**, not prevention; verifier needs `BAYORA_LEDGER_SECRET` |
+| Silent rewrite of a ledger row | SHA-256 chain + Ed25519 over canonical JSON | **Detection**, not prevention; verifier uses the **public** key (`scripts/verify_ledger.py`) |
 | Backend privilege escalation via extra Linux caps | `cap_drop: ALL`, `no-new-privileges`, non-root UID | **Hardening**, not a formal sandbox proof |
 | Unbounded CPU/RAM on db/backend/ollama | Compose `mem_limit` / `cpus` | **Coarse fairness**, not per-test isolation |
 | Anonymous minting of tests / listing all evals / global stats | `X-Operator-Token` on create, list, issue; stats scoped to the calling test unless operator | **Enforced** if the demo operator secret is changed |
@@ -121,11 +121,18 @@ Blue policy is a **post-generation filter** in blue-worker. Raw guardrail text i
 
 ### 5.6 Secrets handling
 
-Compose embeds `POSTGRES_PASSWORD=bayora`, per-team sealing secrets, and demo worker tokens. `BAYORA_LEDGER_SECRET` defaults in code if unset. Leaking `BAYORA_RED_SECRET` decrypts every **red** row, not blue. Demo-only; change them for anything real.
+Compose embeds `POSTGRES_PASSWORD=bayora`, per-team sealing secrets, and demo worker tokens. The ledger signing key is generated into a Compose volume (`ledgerkey`) on first boot if unset. Leaking `BAYORA_RED_SECRET` decrypts every **red** row, not blue. Demo-only; change them for anything real.
 
-### 5.7 Audit is not independently reconstructable by a third party
+### 5.7 Audit integrity vs confidentiality
 
-HMAC verification requires sharing `BAYORA_LEDGER_SECRET`. A judge without the secret cannot verify signatures (they can still re-hash bodies if they have the stored canonical JSON). There is no public-key signature, Merkle checkpoint, or WORM store. Ledger events are visible to **either** team token during the test and may include finding excerpts.
+Judges reconstruct the chain **without** a shared HMAC secret:
+
+- `GET /tests/{id}/ledger` returns **full** SHA-256 hashes, prev hashes, and Ed25519 signatures.
+- Event **bodies** (canonical JSON) stay redacted until conclude, then `GET .../ledger/export` is the replay package.
+- `python scripts/verify_ledger.py export.json` checks hash-link + signature with `public_key_hex` only.
+- FINDING rows store labels and `reply_sha256`, not attack text or model replies.
+
+**Residual:** this is still **detect-tamper**, not WORM. Anyone with the **private** key (broker disk/volume, or `BAYORA_LEDGER_PRIVATE_KEY`) can append events that verify. There is no Merkle checkpoint, timestamping authority, or third-party log. If the volume is wiped, a new key is generated and old rows will not verify. HMAC-SHA256 is no longer used.
 
 ### 5.8 Side channels
 
@@ -145,7 +152,7 @@ The `llm` bridge is not `internal`, so Ollama can reach the internet to pull wei
 | --- | --- |
 | Operator uses the UI “acting as” toggle with both tokens | Tenant confidentiality is a UI fiction |
 | `BAYORA_RED_SECRET` leaked | All red rows decryptable; blue rows are not |
-| `BAYORA_LEDGER_SECRET` leaked or default left in place | Attacker can forge ledger events that still verify |
+| Ledger Ed25519 private key leaked or volume reset | Attacker can forge events that still verify; or old events fail to verify |
 | Broker compromised | Can `/open` both workers (holds both inbound tokens); cannot talk to Ollama itself |
 | Red-worker compromised | Red plaintext + model replies in RAM; cannot decrypt blue or call `/open` on blue |
 | Compose networks flattened to one bridge | Frontend can reach db/Ollama; isolation script fails |
@@ -160,18 +167,18 @@ A finding from this PoC is a **demo of the control loop** (seal → execute → 
 - the real Ollama model was used (not the mock fallback),
 - blue text was never in the model prompt, and execute returned no `reply_excerpt`,
 - generates were serialized and the runner was unloaded between tests (`inference.kv_cache_flushed` true, `runner` is `ollama` not `mock`),
-- the ledger `chain_valid` is true under a secret the verifier actually controls.
+- the ledger `chain_valid` is true under the exported public key (`scripts/verify_ledger.py`).
 
 Keyword heuristics (`bomb`, `jailbreak`, …) are **not** a safety classifier.
 
 ## 8. Future improvements (priority if more time)
 
-1. Ed25519 (or similar) ledger signatures so judges verify without the HMAC secret.
-2. Stop publishing the API to the host if the UI is enough; rotate demo secrets; Postgres RLS so workers cannot SELECT the other team’s ciphertext.
-3. Read-only rootfs, pids limits, rootless engine; tighten seccomp; extend hardening to frontend/db/Ollama.
-4. Per-test cgroups and constant-size / jittered execute responses against timing side channels.
-5. One Ollama (or VM) per evaluation if KV-cache isolation must be hardware-backed.
+1. Stop publishing the API to the host if the UI is enough; rotate demo secrets; Postgres RLS so workers cannot SELECT the other team’s ciphertext.
+2. Read-only rootfs, pids limits, rootless engine; tighten seccomp; extend hardening to frontend/db/Ollama.
+3. Per-test cgroups and constant-size / jittered execute responses against timing side channels.
+4. One Ollama (or VM) per evaluation if KV-cache isolation must be hardware-backed.
+5. Timestamped / Merkle checkpoints so a stolen private key cannot rewrite history unnoticed.
 
 ## 9. One-sentence claim
 
-**We prevent casual cross-team HTTP reads and direct tenant access to Postgres/Ollama on the default Compose networks. Red, blue, and the model are separate containers with separate sealing secrets; the broker does not decrypt artifacts or call Ollama. Blue policy is applied to the reply, not stuffed into the prompt. Inference is serialized and the runner is unloaded when the test id changes. We detect ledger tampering if the HMAC secret is held. We do not prevent a broker that holds both worker tokens, someone who holds demo secrets, KV-cache that survives a failed unload, timing side channels, or inferring that a defense fired from the `defended` label.**
+**We prevent casual cross-team HTTP reads and direct tenant access to Postgres/Ollama on the default Compose networks. Red, blue, and the model are separate containers with separate sealing secrets; the broker does not decrypt artifacts or call Ollama. Blue policy is applied to the reply, not stuffed into the prompt. Inference is serialized and the runner is unloaded when the test id changes. We detect ledger tampering with Ed25519 so a judge verifies without a shared HMAC secret. We do not prevent a broker that holds both worker tokens, someone who holds the ledger private key, KV-cache that survives a failed unload, timing side channels, or inferring that a defense fired from the `defended` label.**
