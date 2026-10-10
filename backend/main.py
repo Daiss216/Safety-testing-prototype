@@ -181,23 +181,25 @@ def read_payloads(
 ):
     team = team_of(test_id, x_token)
     test = get_test(test_id, s)
-    if team == "blue" and test.status != "concluded":
-        # denied access is itself an auditable event
-        log(s, test_id, "ACCESS_DENIED", {
-            "team": "blue", "reason": "red payloads sealed until test conclusion"
-        })
-        s.commit()
-        raise HTTPException(403, "Blue team can only read payloads after the test concludes.")
+    concluded = test.status == "concluded"
     rows = s.query(Payload).filter_by(test_id=test_id).all()
     f = Fernet(key_for(test_id))
     out = []
+    sealed_from_other = 0
     for r in rows:
-        if team == "red" and r.team != "red":
-            continue  # red never sees blue defenses
+        if r.team != team and not concluded:
+            sealed_from_other += 1
+            continue
         out.append({
             "payload_id": r.id,
             "team": r.team,
             "content": f.decrypt(r.ciphertext.encode()).decode(),
+        })
+    if sealed_from_other:
+        log(s, test_id, "ACCESS_DENIED", {
+            "team": team,
+            "reason": "other team's payloads are sealed until test conclusion",
+            "sealed_count": sealed_from_other,
         })
     log(s, test_id, "PAYLOADS_READ", {"by": team, "count": len(out)})
     s.commit()
