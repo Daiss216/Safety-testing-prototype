@@ -84,13 +84,13 @@ These are known gaps. A finding can be **invalidated** by them; we do not claim 
 
 Red, blue, and orchestration share **one FastAPI process**. A bug, debug log, or memory disclosure in that process exposes both teams. Tokens live in **process memory** (`TOKENS`) and vanish on restart (availability), but a live dump yields both teams’ tokens.
 
-### 5.2 Same UI session holds both tokens
+### 5.2 Create-test response still contains both tokens
 
-`POST /tests` returns `red_token` and `blue_token` together; the dashboard stores both and lets the operator switch teams. That is a **demo convenience**, not tenant isolation. Anyone with the create-test response is both red and blue.
+`POST /tests` still returns `red_token` and `blue_token` once so an operator can split them. The UI no longer stores both: after handoff you enter **one** console, or you join with a single pasted token (second browser / teammate). Residual risk: whoever sees the create-test JSON (or the handoff card before they leave it) is briefly both teams. Copy the tokens apart, then enter only one console.
 
-### 5.3 Blue logic inferable from execute
+### 5.3 Outcome labels still weakly infer defenses
 
-On execute, blue plaintext is concatenated into the prompt (`<guardrails>…`). The JSON finding includes `reply_excerpt` (first 160 characters of the model reply). The model may echo guardrails; red also observes `defended` vs `jailbreak_success`. That **violates** “defensive logic must not be inferable by red-team tooling” in the strong sense.
+Execute no longer returns `reply_excerpt`, defense ids, or a `defenses_applied` flag. The ledger stores a SHA-256 of the isolated reply and a `policy_echo_blocked` bit. Blue plaintext is still injected into the **model** prompt (otherwise the defense would not run) but is stripped from tenant-visible output when it appears verbatim. Residual risk: red still sees `defended` vs `jailbreak_success`, which weakly infers that *some* policy fired. Paraphrased policy text that does not match a ≥8-character blue fragment is not stripped.
 
 ### 5.4 LLM-native / shared inference
 
@@ -159,4 +159,4 @@ Keyword heuristics (`bomb`, `jailbreak`, …) are **not** a safety classifier.
 
 ## 9. One-sentence claim
 
-**We prevent casual cross-team HTTP reads and direct tenant access to Postgres/Ollama on the default Compose networks, and we detect ledger tampering if the HMAC secret is held. We do not prevent a trusted-backend compromise, shared-UI token leakage, model-output inference of defenses, KV-cache contamination, or timing side channels.**
+**We prevent casual cross-team HTTP reads and direct tenant access to Postgres/Ollama on the default Compose networks, keep a session to a single team token after handoff, and keep model text out of execute responses. We detect ledger tampering if the HMAC secret is held. We do not prevent a trusted-backend compromise, someone who captures the create-test JSON, KV-cache contamination, timing side channels, or inferring that a defense fired from the `defended` label.**
