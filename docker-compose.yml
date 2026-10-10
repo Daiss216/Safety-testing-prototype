@@ -1,8 +1,8 @@
 version: "3.9"
 
 # BAYORA POC - secure adversarial AI testing infrastructure
-# Three logical tenants (red / blue / client-LLM) on shared infra,
-# isolated by per-test crypto keys, network policies and hardening flags.
+# Tenants are split across networks: the UI can reach only the API,
+# Postgres and Ollama are internal and reachable only from the backend.
 
 services:
   db:
@@ -13,15 +13,13 @@ services:
       POSTGRES_DB: bayora
     volumes:
       - pgdata:/var/lib/postgresql/data
-    networks: [bayora]
+    networks: [data]
     mem_limit: 512m # cgroup resource governance
     cpus: 0.5
 
   ollama:
     image: ollama/ollama:latest
-    networks: [bayora]
-    # Client-LLM tenant: reachable ONLY inside the bayora network.
-    # No published port = red/blue cannot hit it directly.
+    networks: [llm]
     mem_limit: 4g
     cpus: 2.0
 
@@ -35,7 +33,7 @@ services:
     ports:
       - "8000:8000"
     depends_on: [db, ollama]
-    networks: [bayora]
+    networks: [edge, data, llm]
     #infrastructure hardening (Security Core)
     cap_drop: [ALL]
     security_opt:
@@ -49,11 +47,18 @@ services:
     ports:
       - "5173:80"
     depends_on: [backend]
-    networks: [bayora]
+    networks: [edge]
 
 networks:
-  bayora:
-    driver: bridge # isolated bridge = segmentation
+  edge:
+    driver: bridge
+  data:
+    driver: bridge
+    internal: true
+  # Not internal: Ollama needs egress to pull models. Isolation is membership —
+  # only backend is attached, so frontend/db cannot resolve or reach it.
+  llm:
+    driver: bridge
 
 volumes:
   pgdata:

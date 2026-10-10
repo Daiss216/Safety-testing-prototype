@@ -27,10 +27,51 @@ const outcomeColors = {
   benign_or_unclear: "#3dd6c4",
 };
 
+async function api(path, { token = "", ...opts } = {}) {
+  const res = await fetch(`${API}${path}`, {
+    ...opts,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { "X-Token": token } : {}),
+      ...(opts.headers || {}),
+    },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `${res.status} error`);
+  return data;
+}
+
+function CopyField({ label, value, tone }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <span className={`label ${tone}`}>{label}</span>
+        <button
+          type="button"
+          className="btn btn-ghost text-xs py-1"
+          onClick={async () => {
+            await navigator.clipboard.writeText(value);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          }}
+        >
+          {copied ? "copied" : "copy"}
+        </button>
+      </div>
+      <code className="block bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs break-all">
+        {value}
+      </code>
+    </div>
+  );
+}
+
 export default function App() {
-  const [testId, setTestId] = useState("");
-  const [tokens, setTokens] = useState(null);
-  const [team, setTeam] = useState("red");
+  const [session, setSession] = useState(null);
+  const [handoff, setHandoff] = useState(null);
+  const [joinId, setJoinId] = useState("");
+  const [joinTeam, setJoinTeam] = useState("red");
+  const [joinToken, setJoinToken] = useState("");
   const [payload, setPayload] = useState("");
   const [output, setOutput] = useState(null);
   const [error, setError] = useState("");
@@ -38,21 +79,9 @@ export default function App() {
   const [stats, setStats] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  const token = tokens ? tokens[team] : "";
-
-  async function call(path, opts = {}) {
-    const res = await fetch(`${API}${path}`, {
-      ...opts,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Token": token,
-        ...(opts.headers || {}),
-      },
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || `${res.status} error`);
-    return data;
-  }
+  const token = session?.token || "";
+  const team = session?.team || null;
+  const testId = session?.testId || "";
 
   async function run(fn) {
     setBusy(true);
@@ -71,18 +100,68 @@ export default function App() {
   const createTest = () =>
     run(async () => {
       const name = prompt("Evaluation name?", "demo-evaluation") || "demo";
-      const r = await call("/tests", {
+      const r = await api("/tests", {
         method: "POST",
         body: JSON.stringify({ name }),
       });
-      setTestId(r.test_id);
-      setTokens({ red: r.red_token, blue: r.blue_token });
-      return r;
+      leaveConsole();
+      setHandoff({
+        testId: r.test_id,
+        red: r.red_token,
+        blue: r.blue_token,
+      });
+      return {
+        test_id: r.test_id,
+        note: "Tokens are shown once on the handoff card. This browser will keep only the team you enter as.",
+      };
     });
+
+  function enterTeam(chosen, creds) {
+    setSession({
+      testId: creds.testId,
+      team: chosen,
+      token: creds[chosen],
+    });
+    setHandoff(null);
+    setPayload("");
+    setLedger(null);
+    setOutput({
+      test_id: creds.testId,
+      team: chosen,
+      note: `This session holds the ${chosen} token only.`,
+    });
+  }
+
+  function joinTest(e) {
+    e.preventDefault();
+    const id = joinId.trim();
+    const tok = joinToken.trim();
+    if (!id || !tok) {
+      setError("Need a test id and that team's token.");
+      return;
+    }
+    setHandoff(null);
+    setSession({ testId: id, team: joinTeam, token: tok });
+    setPayload("");
+    setLedger(null);
+    setError("");
+    setOutput({
+      test_id: id,
+      team: joinTeam,
+      note: `Joined as ${joinTeam}. The other team's token is not in this session.`,
+    });
+  }
+
+  function leaveConsole() {
+    setSession(null);
+    setPayload("");
+    setLedger(null);
+  }
 
   const upload = () =>
     run(() =>
-      call(`/tests/${testId}/payloads`, {
+      api(`/tests/${testId}/payloads`, {
+        token,
         method: "POST",
         body: JSON.stringify({ content: payload }),
       }).then((r) => ({
@@ -92,21 +171,22 @@ export default function App() {
     );
 
   const execute = () =>
-    run(() => call(`/tests/${testId}/execute`, { method: "POST" }));
+    run(() => api(`/tests/${testId}/execute`, { token, method: "POST" }));
   const conclude = () =>
-    run(() => call(`/tests/${testId}/conclude`, { method: "POST" }));
-  const readPayloads = () => run(() => call(`/tests/${testId}/payloads`));
+    run(() => api(`/tests/${testId}/conclude`, { token, method: "POST" }));
+  const readPayloads = () =>
+    run(() => api(`/tests/${testId}/payloads`, { token }));
 
   const viewLedger = () =>
     run(async () => {
-      const r = await call(`/tests/${testId}/ledger`);
+      const r = await api(`/tests/${testId}/ledger`, { token });
       setLedger(r);
       return { note: `ledger fetched: ${r.events.length} events` };
     });
 
   async function refreshStats() {
     try {
-      setStats(await call("/stats"));
+      setStats(await api("/stats"));
     } catch {
       /* ignore */
     }
@@ -117,7 +197,7 @@ export default function App() {
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold">
             <span className="text-cyan-400">BAYORA</span>{" "}
@@ -126,79 +206,158 @@ export default function App() {
             </span>
           </h1>
           <p className="text-slate-400 text-sm mt-1">
-            Red/blue evaluation with sealed payloads, per-test crypto isolation
-            and a tamper-evident SHA-256 audit ledger.
+            One browser session, one team token. Model replies are isolated from
+            tenants; the ledger stores hashes, not excerpts.
           </p>
         </div>
-        <button onClick={createTest} disabled={busy} className="btn btn-cyan">
-          + New Evaluation
-        </button>
+        <div className="flex gap-2">
+          {session && (
+            <button onClick={leaveConsole} className="btn btn-ghost">
+              Leave console
+            </button>
+          )}
+          <button onClick={createTest} disabled={busy} className="btn btn-cyan">
+            + New Evaluation
+          </button>
+        </div>
       </div>
 
-      {tokens && (
-        <div className="card border-yellow-700 bg-yellow-950/30 text-sm">
-          <b className="text-yellow-400">Test {testId}</b> — hand each token
-          ONLY to its team:
-          <span className="block mt-1 text-red-400">RED: {tokens.red}</span>
-          <span className="block text-blue-400">BLUE: {tokens.blue}</span>
+      {handoff && (
+        <div className="card border-yellow-700 bg-yellow-950/30 space-y-3">
+          <p className="text-sm">
+            <b className="text-yellow-400">Handoff — test {handoff.testId}</b>
+            <span className="text-slate-300">
+              {" "}
+              Copy each token to its team (second browser or teammate), then
+              enter <em>one</em> console. The other token is dropped from this
+              page.
+            </span>
+          </p>
+          <div className="grid md:grid-cols-2 gap-3">
+            <CopyField
+              label="Red token — give only to red"
+              value={handoff.red}
+              tone="text-red-400"
+            />
+            <CopyField
+              label="Blue token — give only to blue"
+              value={handoff.blue}
+              tone="text-blue-400"
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="btn btn-red"
+              onClick={() => enterTeam("red", handoff)}
+            >
+              Enter RED console
+            </button>
+            <button
+              className="btn btn-blue"
+              onClick={() => enterTeam("blue", handoff)}
+            >
+              Enter BLUE console
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!session && (
+        <form className="card space-y-3" onSubmit={joinTest}>
+          <h2 className="label">Join an existing evaluation (one token)</h2>
+          <div className="grid md:grid-cols-3 gap-2">
+            <input
+              className="input"
+              placeholder="test id"
+              value={joinId}
+              onChange={(e) => setJoinId(e.target.value)}
+            />
+            <select
+              className="input"
+              value={joinTeam}
+              onChange={(e) => setJoinTeam(e.target.value)}
+            >
+              <option value="red">red team</option>
+              <option value="blue">blue team</option>
+            </select>
+            <input
+              className="input"
+              placeholder="your team token only"
+              value={joinToken}
+              onChange={(e) => setJoinToken(e.target.value)}
+            />
+          </div>
+          <button className="btn btn-ghost" type="submit">
+            Join console
+          </button>
+        </form>
+      )}
+
+      {session && (
+        <div
+          className={`card text-sm ${
+            team === "red"
+              ? "border-red-800 bg-red-950/20"
+              : "border-blue-800 bg-blue-950/20"
+          }`}
+        >
+          <b className={team === "red" ? "text-red-400" : "text-blue-400"}>
+            {team.toUpperCase()} TEAM
+          </b>
+          <span className="text-slate-300">
+            {" "}
+            — test {testId}. Other-team payloads stay sealed until conclude.
+            Execute returns labels and a reply hash, not model text.
+          </span>
         </div>
       )}
 
       <div className="grid md:grid-cols-2 gap-6">
         <div className="card space-y-3">
-          <div className="flex gap-2 items-center">
-            <span className="label">acting as</span>
-            {["red", "blue"].map((t) => (
-              <button
-                key={t}
-                onClick={() => setTeam(t)}
-                className={`btn ${t === "red" ? "btn-red" : "btn-blue"} ${team === t ? "ring-2 ring-white" : "opacity-60"}`}
-              >
-                {t.toUpperCase()} TEAM
-              </button>
-            ))}
-          </div>
           <textarea
             className="input h-28"
+            disabled={!session}
             placeholder={
-              team === "red"
-                ? "Adversarial prompt / jailbreak sequence…"
-                : "Defensive note / guardrail description…"
+              !session
+                ? "Join or create an evaluation first…"
+                : team === "red"
+                  ? "Adversarial prompt / jailbreak sequence…"
+                  : "Defensive note / guardrail description…"
             }
             value={payload}
             onChange={(e) => setPayload(e.target.value)}
           />
           <div className="flex flex-wrap gap-2">
             <button
-              disabled={busy || !testId || !payload}
+              disabled={busy || !session || !payload}
               onClick={upload}
               className="btn btn-ghost"
             >
               Seal & Upload
             </button>
             <button
-              disabled={busy || !testId || team !== "red"}
+              disabled={busy || !session || team !== "red"}
               onClick={execute}
               className="btn btn-red"
             >
               Execute Attack vs LLM
             </button>
             <button
-              disabled={busy || !testId}
+              disabled={busy || !session}
               onClick={readPayloads}
               className="btn btn-ghost"
             >
               Read Payloads (isolation test)
             </button>
             <button
-              disabled={busy || !testId}
+              disabled={busy || !session}
               onClick={conclude}
               className="btn btn-blue"
             >
               Conclude Test
             </button>
             <button
-              disabled={busy || !testId}
+              disabled={busy || !session}
               onClick={viewLedger}
               className="btn btn-cyan"
             >
