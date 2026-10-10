@@ -75,6 +75,8 @@ Out of scope for this PoC: hypervisor escape, malicious Docker daemon, physical 
 | Silent rewrite of a ledger row | SHA-256 chain + HMAC-SHA256 over canonical JSON | **Detection**, not prevention; verifier needs `BAYORA_LEDGER_SECRET` |
 | Backend privilege escalation via extra Linux caps | `cap_drop: ALL`, `no-new-privileges`, non-root UID | **Hardening**, not a formal sandbox proof |
 | Unbounded CPU/RAM on db/backend/ollama | Compose `mem_limit` / `cpus` | **Coarse fairness**, not per-test isolation |
+| Anonymous minting of tests / listing all evals / global stats | `X-Operator-Token` on create, list, issue; stats scoped to the calling test unless operator | **Enforced** if the demo operator secret is changed |
+| Both team tokens in one HTTP response | Separate one-shot `POST /tests/{id}/tokens` per team | **Enforced** for the API; operator can still issue sequentially |
 
 ## 5. What it does not protect against (residual risk)
 
@@ -84,9 +86,9 @@ These are known gaps. A finding can be **invalidated** by them; we do not claim 
 
 Red, blue, and orchestration share **one FastAPI process**. A bug, debug log, or memory disclosure in that process exposes both teams. Tokens live in **process memory** (`TOKENS`) and vanish on restart (availability), but a live dump yields both teams’ tokens.
 
-### 5.2 Create-test response still contains both tokens
+### 5.2 Operator can still issue both tokens in sequence
 
-`POST /tests` still returns `red_token` and `blue_token` once so an operator can split them. The UI no longer stores both: after handoff you enter **one** console, or you join with a single pasted token (second browser / teammate). Residual risk: whoever sees the create-test JSON (or the handoff card before they leave it) is briefly both teams. Copy the tokens apart, then enter only one console.
+`POST /tests` returns only `test_id`. Each `POST /tests/{id}/tokens` returns **one** team token and will not show that team again (`409`). The UI keeps at most one revealed token. Residual risk: an operator who issues red, copies it, then issues blue has held both over time. That is the handoff job; it is not a dual-token JSON blob. Team join still uses a single pasted token.
 
 ### 5.3 Outcome labels still weakly infer defenses
 
@@ -96,12 +98,12 @@ Execute no longer returns `reply_excerpt`, defense ids, or a `defenses_applied` 
 
 One Ollama instance serves all tests. There is **no** per-test KV-cache isolation, cache flush, or session namespace. Prompt fragments from test A can theoretically remain in GPU/runtime state while test B runs. Cross-session contamination is **unmitigated**.
 
-### 5.5 Unauthenticated and overly open API
+### 5.5 Host-published API and demo operator secret
 
-- `GET /tests` and `GET /stats` require **no** token (aggregate outcomes leak).
-- `POST /tests` is open (anyone can mint tokens).
-- CORS is `allow_origins=["*"]`.
-- Backend port `8000` is published on the host, so the UI is not the only client.
+- `POST /tests`, `GET /tests`, and token-issue require `X-Operator-Token`.
+- `GET /stats` requires the operator token (global) or a team token (that test only).
+- CORS is allowlisted to `http://localhost:5173` and `http://127.0.0.1:5173` (override with `BAYORA_CORS_ORIGINS`).
+- Residual: demo default `BAYORA_OPERATOR_TOKEN=dev-operator-change-me` is in Compose and prefilled in the UI. Backend port `8000` is still published on the host, so the UI is not the only client.
 
 ### 5.6 Secrets handling
 
@@ -159,4 +161,4 @@ Keyword heuristics (`bomb`, `jailbreak`, …) are **not** a safety classifier.
 
 ## 9. One-sentence claim
 
-**We prevent casual cross-team HTTP reads and direct tenant access to Postgres/Ollama on the default Compose networks, keep a session to a single team token after handoff, and keep model text out of execute responses. We detect ledger tampering if the HMAC secret is held. We do not prevent a trusted-backend compromise, someone who captures the create-test JSON, KV-cache contamination, timing side channels, or inferring that a defense fired from the `defended` label.**
+**We prevent casual cross-team HTTP reads and direct tenant access to Postgres/Ollama on the default Compose networks, keep a session to a single team token after handoff, never return both team tokens in one API response, and keep model text out of execute responses. Create/list/global-stats require an operator token. We detect ledger tampering if the HMAC secret is held. We do not prevent a trusted-backend compromise, someone who holds the demo operator secret, KV-cache contamination, timing side channels, or inferring that a defense fired from the `defended` label.**
