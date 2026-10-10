@@ -234,10 +234,9 @@ export default function App() {
             </span>
           </h1>
           <p className="text-slate-400 text-sm mt-1">
-            One browser session, one team token. Model replies are isolated from
-            tenants; the ledger stores hashes, not excerpts. Inference is
-            serialized and the Ollama cache is flushed when the evaluation
-            changes.
+            One browser session, one team token. Red, blue, and the model run
+            in separate containers. Replies are hashed, not shown; Ollama cache
+            is flushed when the evaluation changes.
           </p>
         </div>
         <div className="flex gap-2">

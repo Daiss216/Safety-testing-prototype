@@ -16,7 +16,7 @@ class Payload(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     test_id = Column(String, ForeignKey("tests.id"))
     team = Column(String)                            # red | blue
-    ciphertext = Column(Text)                        # Fernet, per-test key
+    ciphertext = Column(Text)                        # Fernet, per-test per-team key
 
 
 class Ledger(Base):

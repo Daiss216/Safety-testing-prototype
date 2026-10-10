@@ -1,8 +1,14 @@
 version: "3.9"
 
-# BAYORA POC - secure adversarial AI testing infrastructure
-# Tenants are split across networks: the UI can reach only the API,
-# Postgres and Ollama are internal and reachable only from the backend.
+# BAYORA POC — red, blue, and the model are separate containers.
+# Broker never sits on the llm network. Workers are not published to the host.
+
+x-backend-build: &backend-build
+  build: ./backend
+  cap_drop: [ALL]
+  security_opt:
+    - seccomp=./backend/seccomp-bayora.json
+    - no-new-privileges:true
 
 services:
   db:
@@ -14,7 +20,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks: [data]
-    mem_limit: 512m # cgroup resource governance
+    mem_limit: 512m
     cpus: 0.5
 
   ollama:
@@ -23,26 +29,62 @@ services:
     mem_limit: 4g
     cpus: 2.0
 
-  backend:
-    build: ./backend
+  model-gateway:
+    <<: *backend-build
+    command: ["uvicorn", "model_gateway:app", "--host", "0.0.0.0", "--port", "8003"]
     environment:
-      DATABASE_URL: postgresql+psycopg2://bayora:bayora@db:5432/bayora
       OLLAMA_HOST: http://ollama:11434
       BAYORA_MODEL: llama3.2:3b
-      BAYORA_SECRET: dev-secret-change-me
-      BAYORA_OPERATOR_TOKEN: dev-operator-change-me
-      BAYORA_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
-      # 1 = unload Ollama after every generate (slower; stronger cache isolation)
+      BAYORA_GATEWAY_TOKEN: dev-gateway-change-me
       BAYORA_FLUSH_EVERY_CALL: "0"
+    depends_on: [ollama]
+    networks: [llm, tenants]
+    mem_limit: 256m
+    cpus: 0.5
+
+  blue-worker:
+    <<: *backend-build
+    command: ["uvicorn", "blue_worker:app", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      DATABASE_URL: postgresql+psycopg2://bayora:bayora@db:5432/bayora
+      BAYORA_BLUE_SECRET: dev-blue-secret-change-me
+      BAYORA_INTERNAL_TOKEN: dev-blue-internal-change-me
+      BAYORA_EVAL_TOKEN: dev-eval-change-me
+    depends_on: [db]
+    networks: [data, tenants]
+    mem_limit: 256m
+    cpus: 0.5
+
+  red-worker:
+    <<: *backend-build
+    command: ["uvicorn", "red_worker:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      DATABASE_URL: postgresql+psycopg2://bayora:bayora@db:5432/bayora
+      BAYORA_RED_SECRET: dev-red-secret-change-me
+      BAYORA_INTERNAL_TOKEN: dev-red-internal-change-me
+      BAYORA_EVAL_TOKEN: dev-eval-change-me
+      BAYORA_GATEWAY_TOKEN: dev-gateway-change-me
+      GATEWAY_URL: http://model-gateway:8003
+      BLUE_WORKER_URL: http://blue-worker:8002
+    depends_on: [db, model-gateway, blue-worker]
+    networks: [data, tenants]
+    mem_limit: 256m
+    cpus: 0.5
+
+  backend:
+    <<: *backend-build
+    environment:
+      DATABASE_URL: postgresql+psycopg2://bayora:bayora@db:5432/bayora
+      BAYORA_OPERATOR_TOKEN: dev-operator-change-me
+      RED_INTERNAL_TOKEN: dev-red-internal-change-me
+      BLUE_INTERNAL_TOKEN: dev-blue-internal-change-me
+      BAYORA_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      RED_WORKER_URL: http://red-worker:8001
+      BLUE_WORKER_URL: http://blue-worker:8002
     ports:
       - "8000:8000"
-    depends_on: [db, ollama]
-    networks: [edge, data, llm]
-    #infrastructure hardening (Security Core)
-    cap_drop: [ALL]
-    security_opt:
-      - seccomp=./backend/seccomp-bayora.json
-      - no-new-privileges:true
+    depends_on: [db, red-worker, blue-worker]
+    networks: [edge, data, tenants]
     mem_limit: 512m
     cpus: 1.0
 
@@ -56,11 +98,14 @@ services:
 networks:
   edge:
     driver: bridge
+  tenants:
+    driver: bridge
+    internal: true
   data:
     driver: bridge
     internal: true
   # Not internal: Ollama needs egress to pull models. Isolation is membership —
-  # only backend is attached, so frontend/db cannot resolve or reach it.
+  # only model-gateway is attached with it, so UI/workers/db cannot resolve it.
   llm:
     driver: bridge
 
