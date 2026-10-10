@@ -77,6 +77,16 @@ def get_test(test_id: str, s: Session) -> Test:
     return t
 
 
+def require_open(test: Test, s: Session, team: str, action: str) -> None:
+    if test.status != "concluded":
+        return
+    log(s, test.id, "ACCESS_DENIED", {
+        "team": team, "reason": f"cannot {action} after test conclusion",
+    })
+    s.commit()
+    raise HTTPException(409, "This test is concluded; uploads and attacks are closed.")
+
+
 def log(s: Session, test_id: str, event_type: str, data: dict):
     last = (
         s.query(Ledger).filter_by(test_id=test_id).order_by(Ledger.id.desc()).first()
@@ -165,7 +175,8 @@ def upload_payload(
     x_token: str = Header(None), s: Session = Depends(db),
 ):
     team = team_of(test_id, x_token)
-    get_test(test_id, s)
+    test = get_test(test_id, s)
+    require_open(test, s, team, "upload payloads")
     f = Fernet(key_for(test_id))
     p = Payload(test_id=test_id, team=team, ciphertext=f.encrypt(body.content.encode()).decode())
     s.add(p)
@@ -217,7 +228,8 @@ def execute_attack(
         log(s, test_id, "ACCESS_DENIED", {"team": team, "reason": "only red executes attacks"})
         s.commit()
         raise HTTPException(403, "Only the red team can trigger attacks.")
-    get_test(test_id, s)
+    test = get_test(test_id, s)
+    require_open(test, s, team, "execute attacks")
     red = (
         s.query(Payload).filter_by(test_id=test_id, team="red")
         .order_by(Payload.id.desc()).first()
@@ -255,10 +267,12 @@ def execute_attack(
 def conclude_test(
     test_id: str, x_token: str = Header(None), s: Session = Depends(db),
 ):
-    team_of(test_id, x_token)
+    team = team_of(test_id, x_token)
     test = get_test(test_id, s)
+    if test.status == "concluded":
+        raise HTTPException(409, "This test is already concluded.")
     test.status = "concluded"
-    log(s, test_id, "TEST_CONCLUDED", {"by": "platform"})
+    log(s, test_id, "TEST_CONCLUDED", {"by": team})
     s.commit()
     return {"test_id": test_id, "status": "concluded",
             "note": "Payloads/defenses are now mutually readable; ledger stays immutable."}
