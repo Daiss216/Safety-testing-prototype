@@ -32,6 +32,7 @@ Logical tenants on one Docker Compose stack:
 3. Postgres is on an **internal** `data` network; the UI cannot resolve `db` or `ollama`.
 4. Every create / upload / execute / conclude / denied-read is appended to a hash-chained, HMAC-signed ledger.
 5. Backend process drops capabilities, uses a seccomp profile, `no-new-privileges`, and a non-root user.
+6. Inference is serialized; the Ollama runner is unloaded when the evaluation id changes so tests do not share a live KV-cache (best-effort; see §5.4).
 
 ## 2. Trust boundaries
 
@@ -77,6 +78,7 @@ Out of scope for this PoC: hypervisor escape, malicious Docker daemon, physical 
 | Unbounded CPU/RAM on db/backend/ollama | Compose `mem_limit` / `cpus` | **Coarse fairness**, not per-test isolation |
 | Anonymous minting of tests / listing all evals / global stats | `X-Operator-Token` on create, list, issue; stats scoped to the calling test unless operator | **Enforced** if the demo operator secret is changed |
 | Both team tokens in one HTTP response | Separate one-shot `POST /tests/{id}/tokens` per team | **Enforced** for the API; operator can still issue sequentially |
+| Two tests sharing Ollama prompt state | Serialize generate; unload model (`keep_alive: 0`) on test switch | **Best-effort** on one runner; not a separate Ollama per test |
 
 ## 5. What it does not protect against (residual risk)
 
@@ -96,7 +98,14 @@ Execute no longer returns `reply_excerpt`, defense ids, or a `defenses_applied` 
 
 ### 5.4 LLM-native / shared inference
 
-One Ollama instance serves all tests. There is **no** per-test KV-cache isolation, cache flush, or session namespace. Prompt fragments from test A can theoretically remain in GPU/runtime state while test B runs. Cross-session contamination is **unmitigated**.
+One Ollama process still serves every test (no per-tenant model-gateway container). Isolation is **session hygiene on that process**, not a separate runtime:
+
+- Generates are **serialized** (`threading.Lock`): two tests cannot interleave prompts in one runner.
+- The HTTP generate never sends prior `context` tokens, so the API has no chat history.
+- When `test_id` changes, the backend **unloads** the model (`keep_alive: 0`) and waits until `/api/ps` no longer lists it, which drops that runner’s KV-cache before the next generate.
+- `BAYORA_FLUSH_EVERY_CALL=1` unloads after every generate (stronger, slower). Default is flush on **test switch** only, so rounds of the same evaluation may reuse cache.
+
+**Residual:** unload is an Ollama API, not a hardware wipe or a second GPU context. A failed unload, a future Ollama prefix-cache that survives unload, or two backends sharing one Ollama would re-open contamination. Concurrent tests **queue**; they do not run in isolated cgroups. The mock fallback has no KV-cache. Prompt text is still concatenated into one generate (blue guardrails + red attack); output isolation is a strip/hash step, not a separate policy engine.
 
 ### 5.5 Host-published API and demo operator secret
 
@@ -135,7 +144,7 @@ The `llm` bridge is not `internal`, so Ollama can reach the internet to pull wei
 | Backend process compromised | Full cross-tenant read; arbitrary Ollama prompts |
 | Compose networks flattened to one bridge | Frontend can reach db/Ollama; isolation script fails |
 | Ollama down and mock path used | Findings are **not** measurements of the client LLM |
-| Two tests overlap on the same Ollama | Possible KV-cache / context contamination |
+| Two tests overlap on the same Ollama | Queued, not parallel; KV-cache is flushed on test switch if unload succeeds. Contamination remains if unload is ignored or a second client hits Ollama. |
 | Test already `concluded` | Mutual payload read is **intended**; isolation no longer applies |
 
 ## 7. Validity of safety findings
@@ -144,21 +153,20 @@ A finding from this PoC is a **demo of the control loop** (seal → execute → 
 
 - the real Ollama model was used (not the mock fallback),
 - blue text was not leaked in `reply_excerpt`,
-- no other test shared the model session,
+- generates were serialized and the runner was unloaded between tests (`inference.kv_cache_flushed` true, `runner` is `ollama` not `mock`),
 - the ledger `chain_valid` is true under a secret the verifier actually controls.
 
 Keyword heuristics (`bomb`, `jailbreak`, …) are **not** a safety classifier.
 
 ## 8. Future improvements (priority if more time)
 
-1. Separate red/blue browser sessions; never return both tokens in one response.
-2. Redact model output; apply blue policy without putting raw defense text in the red-visible prompt path.
-3. Per-test Ollama session or explicit cache flush; never share KV-cache across evaluations.
-4. Authenticate `/tests` and `/stats`; stop publishing the API to the host if the UI is enough.
-5. Split red-worker / blue-policy / model-gateway processes so compromise of one tenant runtime is not total.
-6. Ed25519 (or similar) ledger signatures so judges verify without the HMAC secret.
-7. Read-only rootfs, pids limits, rootless engine; tighten seccomp; extend hardening beyond the API container.
+1. Split red-worker / blue-policy / model-gateway processes (and optionally one Ollama per test) so compromise of one tenant runtime is not total.
+2. Apply blue policy without putting raw defense text in the model prompt at all.
+3. Ed25519 (or similar) ledger signatures so judges verify without the HMAC secret.
+4. Stop publishing the API to the host if the UI is enough; rotate demo secrets.
+5. Read-only rootfs, pids limits, rootless engine; tighten seccomp; extend hardening beyond the API container.
+6. Per-test cgroups and constant-size / jittered execute responses against timing side channels.
 
 ## 9. One-sentence claim
 
-**We prevent casual cross-team HTTP reads and direct tenant access to Postgres/Ollama on the default Compose networks, keep a session to a single team token after handoff, never return both team tokens in one API response, and keep model text out of execute responses. Create/list/global-stats require an operator token. We detect ledger tampering if the HMAC secret is held. We do not prevent a trusted-backend compromise, someone who holds the demo operator secret, KV-cache contamination, timing side channels, or inferring that a defense fired from the `defended` label.**
+**We prevent casual cross-team HTTP reads and direct tenant access to Postgres/Ollama on the default Compose networks, keep a session to a single team token after handoff, never return both team tokens in one API response, and keep model text out of execute responses. Inference is serialized and the Ollama runner is unloaded when the test id changes. Create/list/global-stats require an operator token. We detect ledger tampering if the HMAC secret is held. We do not prevent a trusted-backend compromise, someone who holds the demo operator secret, KV-cache that survives a failed unload, timing side channels, or inferring that a defense fired from the `defended` label.**

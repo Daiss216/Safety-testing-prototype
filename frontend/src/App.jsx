@@ -235,7 +235,9 @@ export default function App() {
           </h1>
           <p className="text-slate-400 text-sm mt-1">
             One browser session, one team token. Model replies are isolated from
-            tenants; the ledger stores hashes, not excerpts.
+            tenants; the ledger stores hashes, not excerpts. Inference is
+            serialized and the Ollama cache is flushed when the evaluation
+            changes.
           </p>
         </div>
         <div className="flex gap-2">
@@ -361,7 +363,8 @@ export default function App() {
           <span className="text-slate-300">
             {" "}
             — test {testId}. Other-team payloads stay sealed until conclude.
-            Execute returns labels and a reply hash, not model text.
+            Execute returns labels, a reply hash, and cache-flush metadata —
+            not model text.
           </span>
         </div>
       )}
