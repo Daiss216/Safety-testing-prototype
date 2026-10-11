@@ -27,5 +27,5 @@ class Ledger(Base):
     hash = Column(String)                            # SHA-256 of record body
     event_type = Column(String)
     data = Column(Text)                              # canonical JSON body
-    signature = Column(String)                       # HMAC-SHA256
+    signature = Column(String)                       # Ed25519 over canonical body
     ts = Column(Float)                               # unix timestamp

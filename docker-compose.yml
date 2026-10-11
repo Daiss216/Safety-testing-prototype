@@ -81,6 +81,9 @@ services:
       BAYORA_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
       RED_WORKER_URL: http://red-worker:8001
       BLUE_WORKER_URL: http://blue-worker:8002
+      BAYORA_LEDGER_KEY_PATH: /var/lib/bayora/ledger_ed25519.pem
+    volumes:
+      - ledgerkey:/var/lib/bayora
     ports:
       - "8000:8000"
     depends_on: [db, red-worker, blue-worker]
@@ -111,3 +114,4 @@ networks:
 
 volumes:
   pgdata:
+  ledgerkey:
