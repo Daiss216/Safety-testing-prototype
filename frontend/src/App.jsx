@@ -205,7 +205,34 @@ export default function App() {
     run(async () => {
       const r = await api(`/tests/${testId}/ledger`, { token });
       setLedger(r);
-      return { note: `ledger fetched: ${r.events.length} events` };
+      return {
+        note: r.bodies_included
+          ? `ledger fetched: ${r.events.length} events (full bodies; Ed25519)`
+          : `ledger fetched: ${r.events.length} events (hashes only until conclude)`,
+        algorithm: r.algorithm,
+        chain_valid: r.chain_valid,
+        public_key_hex: r.public_key_hex,
+      };
+    });
+
+  const exportLedger = () =>
+    run(async () => {
+      const r = await api(`/tests/${testId}/ledger/export`, { token });
+      const blob = new Blob([JSON.stringify(r, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `bayora-ledger-${testId}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      return {
+        note: "Saved export.json. Verify offline: python scripts/verify_ledger.py bayora-ledger-<id>.json",
+        chain_valid: r.chain_valid,
+        events: r.events.length,
+        public_key_hex: r.public_key_hex,
+      };
     });
 
   async function refreshStats() {
@@ -421,6 +448,13 @@ export default function App() {
             >
               Verify Audit Ledger
             </button>
+            <button
+              disabled={busy || !session}
+              onClick={exportLedger}
+              className="btn btn-ghost"
+            >
+              Export ledger (after conclude)
+            </button>
           </div>
           {error && <p className="text-red-400 text-sm">⛔ {error}</p>}
           {output && (
@@ -475,12 +509,18 @@ export default function App() {
             Audit Ledger —{" "}
             {ledger.chain_valid ? (
               <span className="text-emerald-400">
-                ✔ chain intact (SHA-256 + HMAC verified)
+                ✔ chain intact (SHA-256 + Ed25519)
               </span>
             ) : (
               <span className="text-red-400"> TAMPERING DETECTED</span>
             )}
           </h2>
+          <p className="text-xs text-slate-500 mb-2 break-all">
+            {ledger.algorithm} public key (hex): {ledger.public_key_hex}
+            {ledger.bodies_included
+              ? " — full bodies included; export and run scripts/verify_ledger.py"
+              : " — event bodies redacted until conclude"}
+          </p>
           <table className="w-full text-xs">
             <thead>
               <tr className="text-left text-slate-500">
@@ -500,8 +540,12 @@ export default function App() {
                   <td>{e.seq}</td>
                   <td>{e.type}</td>
                   <td>{new Date(e.ts * 1000).toLocaleString()}</td>
-                  <td className="font-mono">{e.hash}</td>
-                  <td className="font-mono">{e.signature}</td>
+                  <td className="font-mono break-all" title={e.hash}>
+                    {e.hash}
+                  </td>
+                  <td className="font-mono break-all" title={e.signature}>
+                    {e.signature}
+                  </td>
                 </tr>
               ))}
             </tbody>

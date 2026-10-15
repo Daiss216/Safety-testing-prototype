@@ -17,7 +17,15 @@ from typing import Literal
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from audit import GENESIS, make_entry, verify_body
+from audit import (
+    ALG,
+    GENESIS,
+    finding_for_ledger,
+    make_entry,
+    public_key_hex,
+    public_key_pem,
+    verify_body,
+)
 from database import Base, engine, SessionLocal
 from internal import auth_headers
 from models import Ledger, Payload, Test
@@ -276,9 +284,9 @@ def execute_attack(
     log(s, test_id, "EXECUTION_STARTED", {"payload_id": red.id, "via": "red-worker"})
     s.commit()
     finding = worker_post("red", "/execute", {"test_id": test_id}, timeout=180.0)
-    log(s, test_id, "FINDING", finding)
+    log(s, test_id, "FINDING", finding_for_ledger(finding))
     s.commit()
-    return finding
+    return finding_for_ledger(finding)
 
 
 @app.post("/tests/{test_id}/conclude")
@@ -296,23 +304,82 @@ def conclude_test(
             "note": "Payloads/defenses are now mutually readable; ledger stays immutable."}
 
 
-@app.get("/tests/{test_id}/ledger")
-def get_ledger(test_id: str, x_token: str = Header(None), s: Session = Depends(db)):
-    team_of(test_id, x_token)
-    get_test(test_id, s)
-    rows = s.query(Ledger).filter_by(test_id=test_id).order_by(Ledger.id).all()
+def _ledger_meta():
+    return {
+        "algorithm": ALG,
+        "public_key_hex": public_key_hex(),
+        "public_key_pem": public_key_pem(),
+        "genesis": GENESIS,
+        "note": (
+            "SHA-256 hash chain + Ed25519. Verify with the public key; "
+            "the private key is not required. Full bodies are in /export "
+            "after the test concludes."
+        ),
+    }
+
+
+def _replay_rows(rows, include_body: bool):
     prev, valid, events = GENESIS, True, []
     for r in rows:
         ok = verify_body(r.data, r.hash, r.signature) and r.prev_hash == prev
         if not ok:
             valid = False
-        events.append({
-            "seq": r.id, "type": r.event_type, "ts": r.ts,
-            "hash": r.hash[:16] + "...", "signature": r.signature[:16] + "...",
+        item = {
+            "seq": r.id,
+            "type": r.event_type,
+            "ts": r.ts,
+            "prev_hash": r.prev_hash,
+            "hash": r.hash,
+            "signature": r.signature,
             "tampered": not ok,
-        })
+        }
+        if include_body:
+            item["body"] = r.data
+        else:
+            item["body_redacted"] = True
+        events.append(item)
         prev = r.hash
-    return {"test_id": test_id, "chain_valid": valid, "events": events}
+    return valid, events
+
+
+@app.get("/tests/{test_id}/ledger")
+def get_ledger(test_id: str, x_token: str = Header(None), s: Session = Depends(db)):
+    """Full hashes during the test. Event bodies stay redacted until conclude."""
+    team_of(test_id, x_token)
+    test = get_test(test_id, s)
+    rows = s.query(Ledger).filter_by(test_id=test_id).order_by(Ledger.id).all()
+    include_body = test.status == "concluded"
+    valid, events = _replay_rows(rows, include_body)
+    return {
+        **_ledger_meta(),
+        "test_id": test_id,
+        "status": test.status,
+        "bodies_included": include_body,
+        "chain_valid": valid,
+        "events": events,
+    }
+
+
+@app.get("/tests/{test_id}/ledger/export")
+def export_ledger(test_id: str, x_token: str = Header(None), s: Session = Depends(db)):
+    """Canonical JSON for `python scripts/verify_ledger.py export.json`."""
+    team_of(test_id, x_token)
+    test = get_test(test_id, s)
+    if test.status != "concluded":
+        raise HTTPException(
+            409,
+            "Export (full event bodies) is available after conclude. "
+            "GET /ledger still returns the hash chain while the test is open.",
+        )
+    rows = s.query(Ledger).filter_by(test_id=test_id).order_by(Ledger.id).all()
+    valid, events = _replay_rows(rows, include_body=True)
+    return {
+        **_ledger_meta(),
+        "test_id": test_id,
+        "status": test.status,
+        "chain_valid": valid,
+        "events": events,
+    }
 
 
 @app.get("/tests")
