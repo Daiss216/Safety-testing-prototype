@@ -31,7 +31,8 @@ services:
 
   model-gateway:
     <<: *backend-build
-    command: ["uvicorn", "model_gateway:app", "--host", "0.0.0.0", "--port", "8003"]
+    command:
+      ["uvicorn", "model_gateway:app", "--host", "0.0.0.0", "--port", "8003"]
     environment:
       OLLAMA_HOST: http://ollama:11434
       BAYORA_MODEL: llama3.2:3b
@@ -44,12 +45,13 @@ services:
 
   blue-worker:
     <<: *backend-build
-    command: ["uvicorn", "blue_worker:app", "--host", "0.0.0.0", "--port", "8002"]
+    command:
+      ["uvicorn", "blue_worker:app", "--host", "0.0.0.0", "--port", "8002"]
     environment:
       DATABASE_URL: postgresql+psycopg2://bayora:bayora@db:5432/bayora
-      BAYORA_BLUE_SECRET: dev-blue-secret-change-me
-      BAYORA_INTERNAL_TOKEN: dev-blue-internal-change-me
-      BAYORA_EVAL_TOKEN: dev-eval-change-me
+      BAYORA_BLUE_SECRET: ${BAYORA_BLUE_SECRET}
+      BAYORA_INTERNAL_TOKEN: ${BLUE_INTERNAL_TOKEN}
+      BAYORA_EVAL_TOKEN: ${BAYORA_EVAL_TOKEN}
     depends_on: [db]
     networks: [data, tenants]
     mem_limit: 256m
@@ -57,13 +59,14 @@ services:
 
   red-worker:
     <<: *backend-build
-    command: ["uvicorn", "red_worker:app", "--host", "0.0.0.0", "--port", "8001"]
+    command:
+      ["uvicorn", "red_worker:app", "--host", "0.0.0.0", "--port", "8001"]
     environment:
       DATABASE_URL: postgresql+psycopg2://bayora:bayora@db:5432/bayora
-      BAYORA_RED_SECRET: dev-red-secret-change-me
-      BAYORA_INTERNAL_TOKEN: dev-red-internal-change-me
-      BAYORA_EVAL_TOKEN: dev-eval-change-me
-      BAYORA_GATEWAY_TOKEN: dev-gateway-change-me
+      BAYORA_RED_SECRET: ${BAYORA_RED_SECRET}
+      BAYORA_INTERNAL_TOKEN: ${RED_INTERNAL_TOKEN}
+      BAYORA_EVAL_TOKEN: ${BAYORA_EVAL_TOKEN}
+      BAYORA_GATEWAY_TOKEN: ${BAYORA_GATEWAY_TOKEN}
       GATEWAY_URL: http://model-gateway:8003
       BLUE_WORKER_URL: http://blue-worker:8002
     depends_on: [db, model-gateway, blue-worker]
@@ -75,9 +78,9 @@ services:
     <<: *backend-build
     environment:
       DATABASE_URL: postgresql+psycopg2://bayora:bayora@db:5432/bayora
-      BAYORA_OPERATOR_TOKEN: dev-operator-change-me
-      RED_INTERNAL_TOKEN: dev-red-internal-change-me
-      BLUE_INTERNAL_TOKEN: dev-blue-internal-change-me
+      BAYORA_OPERATOR_TOKEN: ${BAYORA_OPERATOR_TOKEN}
+      RED_INTERNAL_TOKEN: ${RED_INTERNAL_TOKEN}
+      BLUE_INTERNAL_TOKEN: ${BLUE_INTERNAL_TOKEN}
       BAYORA_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
       RED_WORKER_URL: http://red-worker:8001
       BLUE_WORKER_URL: http://blue-worker:8002
