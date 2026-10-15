@@ -20,122 +20,139 @@ ChartJS.register(
 );
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
-
-const outcomeColors = {
-  jailbreak_success: "#e84a5f",
-  defended: "#4d9de0",
-  benign_or_unclear: "#3dd6c4",
+const MONO = {
+  jailbreak_success: "#111111",
+  defended: "#777777",
+  benign_or_unclear: "#cccccc",
 };
 
-async function api(path, { token = "", operatorToken = "", ...opts } = {}) {
-  const res = await fetch(`${API}${path}`, {
-    ...opts,
+async function api(path, { token = "", operatorToken = "", ...options } = {}) {
+  const response = await fetch(`${API}${path}`, {
+    ...options,
     headers: {
-      "Content-Type": "application/json",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...(token ? { "X-Token": token } : {}),
       ...(operatorToken ? { "X-Operator-Token": operatorToken } : {}),
-      ...(opts.headers || {}),
+      ...(options.headers || {}),
     },
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || `${res.status} error`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message =
+      typeof data.detail === "string"
+        ? data.detail
+        : JSON.stringify(data.detail || {});
+    throw new Error(message || `HTTP ${response.status}`);
+  }
   return data;
 }
 
-function CopyField({ label, value, tone }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between">
-        <span className={`label ${tone}`}>{label}</span>
-        <button
-          type="button"
-          className="btn btn-ghost text-xs py-1"
-          onClick={async () => {
-            await navigator.clipboard.writeText(value);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-          }}
-        >
-          {copied ? "copied" : "copy"}
-        </button>
-      </div>
-      <code className="block bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs break-all">
-        {value}
-      </code>
-    </div>
-  );
-}
-
 export default function App() {
-  const [operatorToken, setOperatorToken] = useState(
-    () => sessionStorage.getItem("bayora-operator") || "dev-operator-change-me",
-  );
-  const [session, setSession] = useState(null);
+  const [operatorToken, setOperatorToken] = useState("");
   const [handoff, setHandoff] = useState(null);
   const [revealed, setRevealed] = useState(null);
   const [issued, setIssued] = useState({});
+  const [session, setSession] = useState(null);
   const [joinId, setJoinId] = useState("");
   const [joinTeam, setJoinTeam] = useState("red");
   const [joinToken, setJoinToken] = useState("");
   const [payload, setPayload] = useState("");
-  const [output, setOutput] = useState(null);
-  const [error, setError] = useState("");
+  const [out, setOut] = useState(null);
+  const [err, setErr] = useState("");
   const [ledger, setLedger] = useState(null);
   const [stats, setStats] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [concluded, setConcluded] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  const token = session?.token || "";
-  const team = session?.team || null;
   const testId = session?.testId || "";
+  const team = session?.team || "";
+  const token = session?.token || "";
 
-  async function run(fn) {
-    setBusy(true);
-    setError("");
-    setOutput(null);
+  async function refreshStats(
+    activeSession = session,
+    currentOperator = operatorToken,
+  ) {
     try {
-      setOutput(await fn());
-    } catch (e) {
-      setError(e.message);
+      const result = activeSession
+        ? await api("/stats", { token: activeSession.token })
+        : currentOperator
+          ? await api("/stats", { operatorToken: currentOperator })
+          : null;
+      setStats(result);
+    } catch {
+      setStats(null);
+    }
+  }
+
+  useEffect(() => {
+    refreshStats();
+    // Refresh when credentials / active session change.
+  }, [session, operatorToken]);
+
+  async function run(action) {
+    setBusy(true);
+    setErr("");
+    setOut(null);
+    try {
+      const result = await action();
+      if (result !== undefined) setOut(result);
+    } catch (error) {
+      setErr(error.message || "Request failed");
     } finally {
       setBusy(false);
       refreshStats();
     }
   }
 
-  const createTest = () =>
+  function create() {
+    const entered = window.prompt("Evaluation name?", "demo-evaluation");
+    if (entered === null) return;
+    const name = entered.trim();
+    if (!name) {
+      setErr("Please enter an evaluation name.");
+      return;
+    }
     run(async () => {
-      const name = prompt("Evaluation name?", "demo-evaluation") || "demo";
-      const r = await api("/tests", {
-        operatorToken,
+      if (!operatorToken.trim())
+        throw new Error("Enter the operator token first.");
+      const result = await api("/tests", {
+        operatorToken: operatorToken.trim(),
         method: "POST",
         body: JSON.stringify({ name }),
       });
-      leaveConsole();
-      setHandoff({ testId: r.test_id });
+      setSession(null);
+      setHandoff({ testId: result.test_id, name });
       setRevealed(null);
       setIssued({});
+      setPayload("");
+      setLedger(null);
+      setConcluded(false);
       return {
-        test_id: r.test_id,
-        note: "No team tokens in this response. Issue red and blue one at a time.",
+        test_id: result.test_id,
+        name,
+        status: "created — issue team tokens separately",
       };
     });
+  }
 
-  const issueTeam = (chosen) =>
+  function issueTeam(chosen) {
+    if (!handoff) return;
     run(async () => {
-      const r = await api(`/tests/${handoff.testId}/tokens`, {
-        operatorToken,
+      const result = await api(`/tests/${handoff.testId}/tokens`, {
+        operatorToken: operatorToken.trim(),
         method: "POST",
         body: JSON.stringify({ team: chosen }),
       });
-      setRevealed({ team: r.team, token: r.token });
-      setIssued((prev) => ({ ...prev, [chosen]: true }));
+      setRevealed({ team: chosen, token: result.token });
+      setIssued((old) => ({ ...old, [chosen]: true }));
+      setCopied(false);
       return {
-        test_id: r.test_id,
-        team: r.team,
-        note: "Only this team's token is on screen. Copy it before issuing the other.",
+        team: chosen,
+        status: "Token issued. Copy it now; it cannot be retrieved again.",
       };
     });
+  }
 
   function enterRevealed() {
     if (!handoff || !revealed) return;
@@ -144,35 +161,35 @@ export default function App() {
       team: revealed.team,
       token: revealed.token,
     });
-    setHandoff(null);
     setRevealed(null);
-    setIssued({});
     setPayload("");
     setLedger(null);
-    setOutput({
-      test_id: handoff.testId,
-      team: revealed.team,
-      note: `This session holds the ${revealed.team} token only.`,
-    });
+    setErr("");
+    setOut(null);
+    setConcluded(false);
   }
 
-  function joinTest(e) {
-    e.preventDefault();
-    const id = joinId.trim();
-    const tok = joinToken.trim();
-    if (!id || !tok) {
-      setError("Need a test id and that team's token.");
+  function joinTest(event) {
+    event.preventDefault();
+    if (!joinId.trim() || !joinToken.trim()) {
+      setErr("Enter your test ID and team token.");
       return;
     }
-    setHandoff(null);
-    setSession({ testId: id, team: joinTeam, token: tok });
+    setSession({
+      testId: joinId.trim(),
+      team: joinTeam,
+      token: joinToken.trim(),
+    });
+    setJoinToken("");
+    setRevealed(null);
     setPayload("");
     setLedger(null);
-    setError("");
-    setOutput({
-      test_id: id,
+    setConcluded(false);
+    setErr("");
+    setOut({
+      test_id: joinId.trim(),
       team: joinTeam,
-      note: `Joined as ${joinTeam}. The other team's token is not in this session.`,
+      status: "joined — credentials checked on next request",
     });
   }
 
@@ -180,378 +197,386 @@ export default function App() {
     setSession(null);
     setPayload("");
     setLedger(null);
+    setErr("");
+    setOut(null);
+    setConcluded(false);
   }
 
   const upload = () =>
-    run(() =>
-      api(`/tests/${testId}/payloads`, {
+    run(async () => {
+      const result = await api(`/tests/${testId}/payloads`, {
         token,
         method: "POST",
         body: JSON.stringify({ content: payload }),
-      }).then((r) => ({
-        ...r,
-        note: `payload #${r.payload_id} sealed (team=${team})`,
-      })),
-    );
+      });
+      return { payload_id: result.payload_id, sealed: result.sealed, team };
+    });
 
   const execute = () =>
     run(() => api(`/tests/${testId}/execute`, { token, method: "POST" }));
+  const read = () => run(() => api(`/tests/${testId}/payloads`, { token }));
   const conclude = () =>
-    run(() => api(`/tests/${testId}/conclude`, { token, method: "POST" }));
-  const readPayloads = () =>
-    run(() => api(`/tests/${testId}/payloads`, { token }));
-
-  const viewLedger = () =>
     run(async () => {
-      const r = await api(`/tests/${testId}/ledger`, { token });
-      setLedger(r);
-      return {
-        note: r.bodies_included
-          ? `ledger fetched: ${r.events.length} events (full bodies; Ed25519)`
-          : `ledger fetched: ${r.events.length} events (hashes only until conclude)`,
-        algorithm: r.algorithm,
-        chain_valid: r.chain_valid,
-        public_key_hex: r.public_key_hex,
-      };
-    });
-
-  const exportLedger = () =>
-    run(async () => {
-      const r = await api(`/tests/${testId}/ledger/export`, { token });
-      const blob = new Blob([JSON.stringify(r, null, 2)], {
-        type: "application/json",
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `bayora-ledger-${testId}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      return {
-        note: "Saved export.json. Verify offline: python scripts/verify_ledger.py bayora-ledger-<id>.json",
-        chain_valid: r.chain_valid,
-        events: r.events.length,
-        public_key_hex: r.public_key_hex,
-      };
-    });
-
-  async function refreshStats() {
-    try {
-      const r = await api("/stats", {
+      const result = await api(`/tests/${testId}/conclude`, {
         token,
-        operatorToken: session ? "" : operatorToken,
+        method: "POST",
       });
-      setStats(r);
+      setConcluded(true);
+      return result;
+    });
+  const verify = () =>
+    run(async () => {
+      const result = await api(`/tests/${testId}/ledger`, { token });
+      setLedger(result);
+      return { chain_valid: result.chain_valid, events: result.events.length };
+    });
+
+  async function copyToken() {
+    if (!revealed) return;
+    try {
+      await navigator.clipboard.writeText(revealed.token);
+      setCopied(true);
     } catch {
-      setStats(null);
+      setErr("Clipboard unavailable. Select and copy the token manually.");
     }
   }
-  useEffect(() => {
-    refreshStats();
-  }, [token, operatorToken, session]);
 
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold">
-            <span className="text-cyan-400">BAYORA</span>{" "}
-            <span className="text-slate-300 text-xl">
-              | Secure Adversarial AI Testing
-            </span>
-          </h1>
-          <p className="text-slate-400 text-sm mt-1">
-            One browser session, one team token. Red, blue, and the model run in
-            separate containers. Replies are hashed, not shown; Ollama cache is
-            flushed when the evaluation changes.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {session && (
-            <button onClick={leaveConsole} className="btn btn-ghost">
-              Leave console
-            </button>
-          )}
-          <button
-            onClick={createTest}
-            disabled={busy || !operatorToken}
-            className="btn btn-cyan"
-          >
-            + New Evaluation
-          </button>
-        </div>
-      </div>
+    <div className="max-w-3xl mx-auto p-6 space-y-8">
+      <header className="text-center">
+        <h1 className="text-5xl tracking-widest mt-1">BAYORA_</h1>
+        <p className="mt-1 text-lg">
+          secure red/blue evaluation · PoC build{" "}
+          <span className="cursor">▮</span>
+        </p>
+        <div className="dots mt-4" />
+      </header>
+
+      <p className="text-center text-lg px-4">
+        red attacks. blue defends. isolated testing, with every move written to
+        a tamper-evident ledger.
+      </p>
 
       {!session && (
-        <div className="card space-y-2">
-          <span className="label">Operator token</span>
+        <section className="sketch-box space-y-2">
+          <p className="text-xl mb-2">00 — Operator Access</p>
+          <label htmlFor="operator-token" className="block">
+            Operator token
+          </label>
           <input
-            className="input font-mono"
+            id="operator-token"
+            className="sketch-input w-full"
             type="password"
             autoComplete="off"
+            placeholder="BAYORA_OPERATOR_TOKEN"
             value={operatorToken}
-            onChange={(e) => {
-              setOperatorToken(e.target.value);
-              sessionStorage.setItem("bayora-operator", e.target.value);
-            }}
+            onChange={(e) => setOperatorToken(e.target.value)}
           />
-          <p className="text-slate-500 text-xs">
-            Required to create evaluations, list tests, and view global stats.
-            Must match <code>BAYORA_OPERATOR_TOKEN</code>. Demo default is
-            prefilled; change it in Compose for anything real.
+          <p className="text-sm">
+            Local demo only: operator credentials must be kept server-side in
+            production.
           </p>
-        </div>
+        </section>
       )}
 
-      {handoff && (
-        <div className="card border-yellow-700 bg-yellow-950/30 space-y-3">
-          <p className="text-sm">
-            <b className="text-yellow-400">Handoff — test {handoff.testId}</b>
-            <span className="text-slate-300">
-              {" "}
-              Issue one team at a time. The API never returns both tokens in one
-              response; this page never keeps more than one revealed token.
+      <section className="sketch-box">
+        <p className="text-xl mb-2">01 — Start an Evaluation</p>
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            className="sketch-btn"
+            onClick={create}
+            disabled={busy || !operatorToken.trim()}
+          >
+            + NEW EVALUATION
+          </button>
+          {(handoff || session) && (
+            <span className="sketch-box-sm">
+              test: <b>{handoff?.testId || testId}</b>
             </span>
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <button
-              className="btn btn-red"
-              disabled={busy || issued.red}
-              onClick={() => issueTeam("red")}
-            >
-              {issued.red ? "Red already issued" : "Issue RED token"}
-            </button>
-            <button
-              className="btn btn-blue"
-              disabled={busy || issued.blue}
-              onClick={() => issueTeam("blue")}
-            >
-              {issued.blue ? "Blue already issued" : "Issue BLUE token"}
-            </button>
-          </div>
-          {revealed && (
-            <>
-              <CopyField
-                label={`${revealed.team} token — give only to ${revealed.team}`}
-                value={revealed.token}
-                tone={
-                  revealed.team === "red" ? "text-red-400" : "text-blue-400"
-                }
-              />
-              <button className="btn btn-cyan" onClick={enterRevealed}>
-                Enter {revealed.team.toUpperCase()} console
-              </button>
-            </>
           )}
         </div>
-      )}
+        {!session && handoff && (
+          <div className="mt-4 space-y-3">
+            <p>
+              Evaluation: <b>{handoff.name}</b>
+            </p>
+            <p className="text-lg">
+              Issue each token separately and give it only to its team.
+            </p>
+            <div className="flex gap-2 flex-wrap">
+              <button
+                className="sketch-btn"
+                disabled={busy || issued.red}
+                onClick={() => issueTeam("red")}
+              >
+                {issued.red ? "RED ISSUED" : "ISSUE RED TOKEN"}
+              </button>
+              <button
+                className="sketch-btn"
+                disabled={busy || issued.blue}
+                onClick={() => issueTeam("blue")}
+              >
+                {issued.blue ? "BLUE ISSUED" : "ISSUE BLUE TOKEN"}
+              </button>
+            </div>
+            {revealed && (
+              <div className="sketch-box-sm space-y-2">
+                <p>
+                  {revealed.team.toUpperCase()} TOKEN — GIVE ONLY TO{" "}
+                  {revealed.team.toUpperCase()} TEAM
+                </p>
+                <code className="block break-all select-all">
+                  {revealed.token}
+                </code>
+                <div className="flex gap-2 flex-wrap">
+                  <button className="sketch-btn" onClick={copyToken}>
+                    {copied ? "COPIED" : "COPY TOKEN"}
+                  </button>
+                  <button className="sketch-btn" onClick={enterRevealed}>
+                    ENTER {revealed.team.toUpperCase()} CONSOLE
+                  </button>
+                </div>
+                <p className="text-sm">
+                  Copy before issuing another token; the previous token will no
+                  longer be shown.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       {!session && (
-        <form className="card space-y-3" onSubmit={joinTest}>
-          <h2 className="label">Join an existing evaluation (one token)</h2>
-          <div className="grid md:grid-cols-3 gap-2">
+        <section className="sketch-box">
+          <p className="text-xl mb-2">Join an Existing Evaluation</p>
+          <form className="space-y-2" onSubmit={joinTest}>
             <input
-              className="input"
-              placeholder="test id"
+              className="sketch-input w-full"
+              placeholder="Test ID"
               value={joinId}
               onChange={(e) => setJoinId(e.target.value)}
             />
             <select
-              className="input"
+              className="sketch-input w-full"
               value={joinTeam}
               onChange={(e) => setJoinTeam(e.target.value)}
             >
-              <option value="red">red team</option>
-              <option value="blue">blue team</option>
+              <option value="red">Red Team</option>
+              <option value="blue">Blue Team</option>
             </select>
             <input
-              className="input"
-              placeholder="your team token only"
+              className="sketch-input w-full"
+              type="password"
+              autoComplete="off"
+              placeholder="Your team's token only"
               value={joinToken}
               onChange={(e) => setJoinToken(e.target.value)}
             />
-          </div>
-          <button className="btn btn-ghost" type="submit">
-            Join console
-          </button>
-        </form>
+            <button className="sketch-btn" type="submit">
+              JOIN CONSOLE
+            </button>
+          </form>
+        </section>
       )}
 
       {session && (
-        <div
-          className={`card text-sm ${
-            team === "red"
-              ? "border-red-800 bg-red-950/20"
-              : "border-blue-800 bg-blue-950/20"
-          }`}
-        >
-          <b className={team === "red" ? "text-red-400" : "text-blue-400"}>
-            {team.toUpperCase()} TEAM
-          </b>
-          <span className="text-slate-300">
-            {" "}
-            — test {testId}. Other-team payloads stay sealed until conclude.
-            Execute returns labels, a reply hash, and cache-flush metadata — not
-            model text.
-          </span>
-        </div>
-      )}
-
-      <div className="grid md:grid-cols-2 gap-6">
-        <div className="card space-y-3">
-          <textarea
-            className="input h-28"
-            disabled={!session}
-            placeholder={
-              !session
-                ? "Join or create an evaluation first…"
-                : team === "red"
-                  ? "Adversarial prompt / jailbreak sequence…"
-                  : "Defensive note / guardrail description…"
-            }
-            value={payload}
-            onChange={(e) => setPayload(e.target.value)}
-          />
-          <div className="flex flex-wrap gap-2">
-            <button
-              disabled={busy || !session || !payload}
-              onClick={upload}
-              className="btn btn-ghost"
-            >
-              Seal & Upload
-            </button>
-            <button
-              disabled={busy || !session || team !== "red"}
-              onClick={execute}
-              className="btn btn-red"
-            >
-              Execute Attack vs LLM
-            </button>
-            <button
-              disabled={busy || !session}
-              onClick={readPayloads}
-              className="btn btn-ghost"
-            >
-              Read Payloads (isolation test)
-            </button>
-            <button
-              disabled={busy || !session}
-              onClick={conclude}
-              className="btn btn-blue"
-            >
-              Conclude Test
-            </button>
-            <button
-              disabled={busy || !session}
-              onClick={viewLedger}
-              className="btn btn-cyan"
-            >
-              Verify Audit Ledger
-            </button>
-            <button
-              disabled={busy || !session}
-              onClick={exportLedger}
-              className="btn btn-ghost"
-            >
-              Export ledger (after conclude)
+        <section className="sketch-box">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <p className="text-xl">{team.toUpperCase()} TEAM CONSOLE</p>
+              <p>
+                test: <b>{testId}</b>
+              </p>
+            </div>
+            <button className="sketch-btn" onClick={leaveConsole}>
+              LEAVE CONSOLE
             </button>
           </div>
-          {error && <p className="text-red-400 text-sm">⛔ {error}</p>}
-          {output && (
-            <pre className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs overflow-auto max-h-56">
-              {JSON.stringify(output, null, 2)}
-            </pre>
-          )}
-        </div>
+        </section>
+      )}
 
-        <div className="card space-y-4">
-          <h2 className="label">Findings Overview</h2>
-          {stats ? (
-            <>
+      <section className="sketch-box">
+        <p className="text-xl mb-2">02 — Attack Console</p>
+        <p className="mb-3 text-lg">
+          {session
+            ? `${team.toUpperCase()} TEAM · ${concluded ? "CONCLUDED" : "ACTIVE"}`
+            : "Join a team to begin"}
+        </p>
+        <textarea
+          className="sketch-input h-24"
+          placeholder={
+            !session
+              ? "> join an evaluation first…"
+              : team === "red"
+                ? "> type an adversarial prompt…"
+                : "> describe a defense…"
+          }
+          value={payload}
+          onChange={(e) => setPayload(e.target.value)}
+          disabled={!session || busy || concluded}
+        />
+        <div className="flex flex-wrap gap-2 mt-3">
+          <button
+            className="sketch-btn"
+            disabled={busy || !session || !payload.trim() || concluded}
+            onClick={upload}
+          >
+            SEAL
+          </button>
+          <button
+            className="sketch-btn"
+            disabled={busy || !session || team !== "red" || concluded}
+            onClick={execute}
+          >
+            EXECUTE
+          </button>
+          <button
+            className="sketch-btn"
+            disabled={busy || !session}
+            onClick={read}
+          >
+            READ
+          </button>
+          <button
+            className="sketch-btn"
+            disabled={busy || !session || concluded}
+            onClick={conclude}
+          >
+            CONCLUDE
+          </button>
+          <button
+            className="sketch-btn"
+            disabled={busy || !session}
+            onClick={verify}
+          >
+            VERIFY LEDGER
+          </button>
+        </div>
+        {err && (
+          <p role="alert" className="mt-3 text-lg">
+            ✗ REQUEST FAILED — {err}
+          </p>
+        )}
+        {out && (
+          <pre className="sketch-pre mt-3">{JSON.stringify(out, null, 2)}</pre>
+        )}
+      </section>
+
+      <section className="sketch-box">
+        <p className="text-xl mb-2">03 — Findings</p>
+        {stats && Object.keys(stats.per_day || {}).length > 0 ? (
+          <div className="grid sm:grid-cols-2 gap-6">
+            <div>
               <Bar
                 data={{
                   labels: Object.keys(stats.per_day),
                   datasets: [
                     {
-                      label: "Findings / day",
                       data: Object.values(stats.per_day),
-                      backgroundColor: "#3dd6c4",
+                      backgroundColor: "#111",
+                      borderColor: "#111",
+                      borderWidth: 2,
                     },
                   ],
                 }}
-                options={{ plugins: { legend: { display: false } } }}
+                options={{
+                  plugins: { legend: { display: false } },
+                  scales: {
+                    x: {
+                      grid: { display: false },
+                      ticks: {
+                        color: "#111",
+                        font: { family: "VT323", size: 15 },
+                      },
+                    },
+                    y: {
+                      grid: { color: "#ddd" },
+                      ticks: {
+                        color: "#111",
+                        font: { family: "VT323", size: 15 },
+                      },
+                    },
+                  },
+                }}
               />
+            </div>
+            <div>
               <Doughnut
                 data={{
-                  labels: Object.keys(stats.outcomes),
+                  labels: Object.keys(stats.outcomes || {}),
                   datasets: [
                     {
-                      data: Object.values(stats.outcomes),
-                      backgroundColor: Object.keys(stats.outcomes).map(
-                        (k) => outcomeColors[k],
+                      data: Object.values(stats.outcomes || {}),
+                      backgroundColor: Object.keys(stats.outcomes || {}).map(
+                        (k) => MONO[k] || "#aaa",
                       ),
+                      borderColor: "#111",
+                      borderWidth: 2,
                     },
                   ],
                 }}
+                options={{
+                  plugins: {
+                    legend: {
+                      position: "bottom",
+                      labels: {
+                        color: "#111",
+                        font: { family: "VT323", size: 15 },
+                      },
+                    },
+                  },
+                }}
               />
-            </>
-          ) : (
-            <p className="text-slate-500 text-sm">
-              No findings yet — run an attack.
-            </p>
-          )}
-        </div>
-      </div>
+            </div>
+          </div>
+        ) : (
+          <p className="text-lg">no findings yet — run an attack ↑</p>
+        )}
+      </section>
 
       {ledger && (
-        <div className="card">
-          <h2 className="label mb-2">
-            Audit Ledger —{" "}
-            {ledger.chain_valid ? (
-              <span className="text-emerald-400">
-                ✔ chain intact (SHA-256 + Ed25519)
-              </span>
-            ) : (
-              <span className="text-red-400"> TAMPERING DETECTED</span>
-            )}
-          </h2>
-          <p className="text-xs text-slate-500 mb-2 break-all">
-            {ledger.algorithm} public key (hex): {ledger.public_key_hex}
-            {ledger.bodies_included
-              ? " — full bodies included; export and run scripts/verify_ledger.py"
-              : " — event bodies redacted until conclude"}
+        <section className="sketch-box">
+          <p className="text-xl mb-2">04 — Audit Ledger</p>
+          <p className="text-lg mb-2">
+            {ledger.chain_valid
+              ? "✔ chain intact — audit verified"
+              : "✗ TAMPERING DETECTED"}
           </p>
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-left text-slate-500">
-                <th>#</th>
-                <th>event</th>
-                <th>time</th>
-                <th>hash</th>
-                <th>sig</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ledger.events.map((e) => (
-                <tr
-                  key={e.seq}
-                  className={e.tampered ? "text-red-400" : "text-slate-300"}
-                >
-                  <td>{e.seq}</td>
-                  <td>{e.type}</td>
-                  <td>{new Date(e.ts * 1000).toLocaleString()}</td>
-                  <td className="font-mono break-all" title={e.hash}>
-                    {e.hash}
-                  </td>
-                  <td className="font-mono break-all" title={e.signature}>
-                    {e.signature}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="sketch-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>event</th>
+                  <th>time</th>
+                  <th>hash</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {ledger.events.map((e) => (
+                  <tr key={e.seq} className={e.tampered ? "line-through" : ""}>
+                    <td>{e.seq}</td>
+                    <td>{e.type}</td>
+                    <td>{new Date(e.ts * 1000).toLocaleTimeString()}</td>
+                    <td className="break-all">{e.hash}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
+
+      <footer className="text-center space-y-1 pb-4">
+        <div className="dots mb-3" />
+        <p className="text-xl">
+          isolation: separate workers · team keys · tamper-evident ledger
+        </p>
+        <p className="text-[15px]">
+          bayora_poc | a secure adversarial AI testing broker |{" "}
+          {new Date().getFullYear()}
+        </p>
+      </footer>
     </div>
   );
 }
