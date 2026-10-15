@@ -1,14 +1,22 @@
-version: "3.9"
-
 # BAYORA POC — red, blue, and the model are separate containers.
 # Broker never sits on the llm network. Workers are not published to the host.
+#
+# Custom seccomp-bayora.json is not applied: on Docker Desktop 29 it kills the
+# process during netns setup, so the stack never starts. We keep Docker's
+# default seccomp plus cap_drop ALL and no-new-privileges. See THREAT_MODEL.md.
 
 x-backend-build: &backend-build
   build: ./backend
   cap_drop: [ALL]
   security_opt:
-    - seccomp=./backend/seccomp-bayora.json
     - no-new-privileges:true
+  restart: unless-stopped
+
+x-worker-health: &worker-health
+  interval: 5s
+  timeout: 3s
+  retries: 12
+  start_period: 10s
 
 services:
   db:
@@ -22,12 +30,36 @@ services:
     networks: [data]
     mem_limit: 512m
     cpus: 0.5
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bayora -d bayora"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   ollama:
     image: ollama/ollama:latest
     networks: [llm]
     mem_limit: 4g
     cpus: 2.0
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint:
+      - sh
+      - -c
+      - until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull llama3.2:3b
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks: [llm]
+    restart: on-failure
 
   model-gateway:
     <<: *backend-build
@@ -37,10 +69,21 @@ services:
       BAYORA_MODEL: llama3.2:3b
       BAYORA_GATEWAY_TOKEN: dev-gateway-change-me
       BAYORA_FLUSH_EVERY_CALL: "0"
-    depends_on: [ollama]
+    depends_on:
+      ollama:
+        condition: service_healthy
     networks: [llm, tenants]
     mem_limit: 256m
     cpus: 0.5
+    healthcheck:
+      <<: *worker-health
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health')",
+        ]
 
   blue-worker:
     <<: *backend-build
@@ -50,10 +93,21 @@ services:
       BAYORA_BLUE_SECRET: dev-blue-secret-change-me
       BAYORA_INTERNAL_TOKEN: dev-blue-internal-change-me
       BAYORA_EVAL_TOKEN: dev-eval-change-me
-    depends_on: [db]
+    depends_on:
+      db:
+        condition: service_healthy
     networks: [data, tenants]
     mem_limit: 256m
     cpus: 0.5
+    healthcheck:
+      <<: *worker-health
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health')",
+        ]
 
   red-worker:
     <<: *backend-build
@@ -66,10 +120,34 @@ services:
       BAYORA_GATEWAY_TOKEN: dev-gateway-change-me
       GATEWAY_URL: http://model-gateway:8003
       BLUE_WORKER_URL: http://blue-worker:8002
-    depends_on: [db, model-gateway, blue-worker]
+    depends_on:
+      db:
+        condition: service_healthy
+      model-gateway:
+        condition: service_healthy
+      blue-worker:
+        condition: service_healthy
     networks: [data, tenants]
     mem_limit: 256m
     cpus: 0.5
+    healthcheck:
+      <<: *worker-health
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')",
+        ]
+
+  ledger-init:
+    image: busybox:1.36
+    user: "0:0"
+    command: ["sh", "-c", "mkdir -p /var/lib/bayora && chown -R 10001:10001 /var/lib/bayora"]
+    volumes:
+      - ledgerkey:/var/lib/bayora
+    networks: [data]
+    restart: "no"
 
   backend:
     <<: *backend-build
@@ -86,17 +164,40 @@ services:
       - ledgerkey:/var/lib/bayora
     ports:
       - "8000:8000"
-    depends_on: [db, red-worker, blue-worker]
+    depends_on:
+      db:
+        condition: service_healthy
+      ledger-init:
+        condition: service_completed_successfully
+      red-worker:
+        condition: service_healthy
+      blue-worker:
+        condition: service_healthy
     networks: [edge, data, tenants]
     mem_limit: 512m
     cpus: 1.0
+    healthcheck:
+      <<: *worker-health
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:8000
     ports:
       - "5173:80"
-    depends_on: [backend]
+    depends_on:
+      backend:
+        condition: service_healthy
     networks: [edge]
+    restart: unless-stopped
 
 networks:
   edge:

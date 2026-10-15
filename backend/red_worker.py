@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import Base, SessionLocal, engine
+from database import SessionLocal, ensure_schema
 from internal import EVAL_TOKEN, GATEWAY_TOKEN, auth_headers, require_internal
 from keys import key_for
 from models import Payload
@@ -18,7 +18,7 @@ TEAM_SECRET = os.getenv("BAYORA_RED_SECRET", "")
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://model-gateway:8003")
 BLUE_WORKER_URL = os.getenv("BLUE_WORKER_URL", "http://blue-worker:8002")
 
-Base.metadata.create_all(engine)
+ensure_schema()
 app = FastAPI(title="Bayora red worker")
 
 

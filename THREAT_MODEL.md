@@ -32,7 +32,7 @@ Logical tenants on one Docker Compose stack:
 2. Neither team can call Ollama directly; only **model-gateway** is on the `llm` network with Ollama.
 3. Postgres is on an **internal** `data` network; the UI cannot resolve `db` or `ollama`.
 4. Every create / upload / execute / conclude / denied-read is appended to a SHA-256 hash chain signed with Ed25519. A verifier needs only the public key.
-5. Backend process drops capabilities, uses a seccomp profile, `no-new-privileges`, and a non-root user.
+5. Backend/workers/gateway drop capabilities, use `no-new-privileges`, and a non-root user (Docker default seccomp; custom allowlist withdrawn — see §5.9).
 6. Inference is serialized; the Ollama runner is unloaded when the evaluation id changes so tests do not share a live KV-cache (best-effort; see §5.4).
 
 ## 2. Trust boundaries
@@ -92,7 +92,7 @@ These are known gaps. A finding can be **invalidated** by them; we do not claim 
 
 ### 5.1 Broker is still an orchestration TCB
 
-Red, blue, and the model are **separate processes** with separate sealing secrets and inbound tokens. A dump of red-worker yields red plaintext in RAM and `BAYORA_RED_SECRET`, not blue’s secret. Residual: the broker holds **both** `RED_INTERNAL_TOKEN` and `BLUE_INTERNAL_TOKEN`, so a compromised broker can invoke `/open` on both workers (and still holds both team capability tokens in `TOKENS`). Team tokens vanish on broker restart (availability).
+Red, blue, and the model are **separate processes** with separate sealing secrets and inbound tokens. A dump of red-worker yields red plaintext in RAM and `BAYORA_RED_SECRET`, not blue’s secret. Residual: the broker holds **both** `RED_INTERNAL_TOKEN` and `BLUE_INTERNAL_TOKEN`, so a compromised broker can invoke `/open` on both workers. Team capability tokens are stored in Postgres (`capabilities`) so auth survives a broker restart; a stolen DB therefore includes those tokens (not Fernet secrets). The operator cannot re-display a token after it has been issued.
 
 ### 5.2 Operator can still issue both tokens in sequence
 
@@ -140,7 +140,7 @@ Red and blue no longer share a Python runtime (separate containers, separate cgr
 
 ### 5.9 Container surface
 
-Seccomp and cap-drop apply to **backend only**. Frontend (nginx), Postgres, and Ollama run with image defaults (often root). The seccomp profile still allows `clone` / `fork` / `execve`. Filesystems are not `read_only`. This is not gVisor/Firecracker; a container breakout is outside the PoC claim but also not demonstrated as prevented.
+`cap_drop: ALL` and `no-new-privileges` apply to broker/workers/gateway. Frontend (nginx), Postgres, and Ollama run with image defaults (often root). A custom seccomp allowlist (`backend/seccomp-bayora.json`) was tried and **withdrawn**: on Docker Desktop 29 it aborted the process during netns setup, so the demo stack would not start. We therefore use **Docker’s default seccomp**, which still blocks many dangerous syscalls, plus cap-drop. Filesystems are not `read_only`. Rootless Docker/Podman is not enabled in this demo. This is not gVisor/Firecracker; a container breakout is outside the PoC claim but also not demonstrated as prevented.
 
 ### 5.10 `llm` network egress
 
@@ -150,7 +150,7 @@ The `llm` bridge is not `internal`, so Ollama can reach the internet to pull wei
 
 | Condition | What breaks |
 | --- | --- |
-| Operator uses the UI “acting as” toggle with both tokens | Tenant confidentiality is a UI fiction |
+| Operator issues both tokens in sequence and pastes both into one brain | Confidentiality still depends on not sharing the second token |
 | `BAYORA_RED_SECRET` leaked | All red rows decryptable; blue rows are not |
 | Ledger Ed25519 private key leaked or volume reset | Attacker can forge events that still verify; or old events fail to verify |
 | Broker compromised | Can `/open` both workers (holds both inbound tokens); cannot talk to Ollama itself |

@@ -1,0 +1,8 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+bayora.db
+*.pem
+.env
+.DS_Store

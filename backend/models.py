@@ -11,6 +11,15 @@ class Test(Base):
     genesis_hash = Column(String)
 
 
+class Capability(Base):
+    """Per-test team tokens. Survives broker restart (unlike an in-memory dict)."""
+    __tablename__ = "capabilities"
+    test_id = Column(String, ForeignKey("tests.id"), primary_key=True)
+    team = Column(String, primary_key=True)          # red | blue
+    token = Column(String, nullable=False)
+    issued = Column(Integer, default=0)              # 0 until operator POST /tokens
+
+
 class Payload(Base):
     __tablename__ = "payloads"
     id = Column(Integer, primary_key=True, autoincrement=True)

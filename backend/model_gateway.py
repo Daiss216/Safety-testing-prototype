@@ -27,13 +27,21 @@ class GenerateIn(BaseModel):
     prompt: str
 
 
-def _ollama_loaded() -> bool:
-    r = httpx.get(f"{OLLAMA_HOST}/api/ps", timeout=10)
+def _model_names(path: str) -> list[str]:
+    r = httpx.get(f"{OLLAMA_HOST}{path}", timeout=10)
     r.raise_for_status()
     names = []
     for m in r.json().get("models") or []:
         names.append(str(m.get("name") or m.get("model") or ""))
-    return any(MODEL in n or n in (MODEL or "") for n in names)
+    return names
+
+
+def _model_pulled() -> bool:
+    return any(MODEL in n or n.startswith(MODEL) for n in _model_names("/api/tags"))
+
+
+def _ollama_loaded() -> bool:
+    return any(MODEL in n or n in (MODEL or "") for n in _model_names("/api/ps"))
 
 
 def _ollama_unload() -> bool:
@@ -80,6 +88,8 @@ def generate(body: GenerateIn, _: None = Depends(require_gateway)):
             and _last_inference_test != body.test_id
         )
         try:
+            if not _model_pulled():
+                raise RuntimeError("model weights are not on the runner yet")
             if FLUSH_EVERY_CALL or switch:
                 meta["kv_cache_flushed"] = _ollama_unload()
             keep_alive = 0 if FLUSH_EVERY_CALL else "5m"

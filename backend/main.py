@@ -26,9 +26,9 @@ from audit import (
     public_key_pem,
     verify_body,
 )
-from database import Base, engine, SessionLocal
+from database import SessionLocal, ensure_schema
 from internal import auth_headers
-from models import Ledger, Payload, Test
+from models import Capability, Ledger, Payload, Test
 
 from dotenv import load_dotenv
 
@@ -46,7 +46,7 @@ CORS_ORIGINS = [
     if o.strip()
 ]
 
-Base.metadata.create_all(engine)
+ensure_schema()
 
 app = FastAPI(title="Bayora - Secure Adversarial AI Testing")
 app.add_middleware(
@@ -56,8 +56,6 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-Token", "X-Operator-Token"],
 )
 
-TOKENS: dict[str, dict[str, str]] = {}
-ISSUED: dict[str, set[str]] = {}
 WORKERS = {"red": RED_WORKER_URL, "blue": BLUE_WORKER_URL}
 WORKER_TOKENS = {
     "red": os.getenv("RED_INTERNAL_TOKEN", ""),
@@ -84,23 +82,22 @@ def require_operator(x_operator_token: str | None = Header(default=None)) -> Non
         raise HTTPException(401, "valid X-Operator-Token required")
 
 
-def test_id_of_token(token: str | None) -> str:
+def test_id_of_token(token: str | None, s: Session) -> str:
     if not token:
         raise HTTPException(401, "missing token")
-    for test_id, teams in TOKENS.items():
-        for tok in teams.values():
-            if hmac.compare_digest(tok, token):
-                return test_id
+    for row in s.query(Capability).all():
+        if hmac.compare_digest(row.token, token):
+            return row.test_id
     raise HTTPException(401, "invalid token")
 
 
-def team_of(test_id: str, token: str | None) -> str:
-    t = TOKENS.get(test_id)
-    if not t:
+def team_of(test_id: str, token: str | None, s: Session) -> str:
+    rows = s.query(Capability).filter_by(test_id=test_id).all()
+    if not rows:
         raise HTTPException(401, "unknown test id")
-    for team, tok in t.items():
-        if token and hmac.compare_digest(tok, token):
-            return team
+    for row in rows:
+        if token and hmac.compare_digest(row.token, token):
+            return row.team
     raise HTTPException(403, "invalid token")
 
 
@@ -133,6 +130,7 @@ def log(s: Session, test_id: str, event_type: str, data: dict):
             data=body, signature=sig, ts=ts,
         )
     )
+    s.flush()
 
 
 def worker_post(team: str, path: str, payload: dict, timeout: float = 30.0) -> dict:
@@ -174,10 +172,12 @@ def create_test(
     _: None = Depends(require_operator),
 ):
     test_id = uuid.uuid4().hex[:12]
-    TOKENS[test_id] = {"red": uuid.uuid4().hex, "blue": uuid.uuid4().hex}
-    ISSUED[test_id] = set()
     h, sig, ts, raw = make_entry(GENESIS, "TEST_CREATED", {"name": body.name})
     s.add(Test(id=test_id, name=body.name, created_at=ts, genesis_hash=h))
+    for team in ("red", "blue"):
+        s.add(Capability(
+            test_id=test_id, team=team, token=uuid.uuid4().hex, issued=0,
+        ))
     s.add(Ledger(
         test_id=test_id, prev_hash=GENESIS, hash=h, event_type="TEST_CREATED",
         data=raw, signature=sig, ts=ts,
@@ -197,18 +197,18 @@ def issue_team_token(
     _: None = Depends(require_operator),
 ):
     get_test(test_id, s)
-    if test_id not in TOKENS:
+    row = s.get(Capability, (test_id, body.team))
+    if not row:
         raise HTTPException(401, "unknown test id")
-    issued = ISSUED.setdefault(test_id, set())
-    if body.team in issued:
+    if row.issued:
         raise HTTPException(409, f"{body.team} token already issued; server will not show it again")
-    issued.add(body.team)
+    row.issued = 1
     log(s, test_id, "TOKEN_ISSUED", {"team": body.team})
     s.commit()
     return {
         "test_id": test_id,
         "team": body.team,
-        "token": TOKENS[test_id][body.team],
+        "token": row.token,
         "note": "Copy this token to that team only. The other team's token is not in this response.",
     }
 
@@ -218,7 +218,7 @@ def upload_payload(
     test_id: str, body: PayloadIn,
     x_token: str = Header(None), s: Session = Depends(db),
 ):
-    team = team_of(test_id, x_token)
+    team = team_of(test_id, x_token, s)
     test = get_test(test_id, s)
     require_open(test, s, team, "upload payloads")
     sealed = worker_post(team, "/seal", {"test_id": test_id, "content": body.content})
@@ -234,7 +234,7 @@ def upload_payload(
 def read_payloads(
     test_id: str, x_token: str = Header(None), s: Session = Depends(db),
 ):
-    team = team_of(test_id, x_token)
+    team = team_of(test_id, x_token, s)
     test = get_test(test_id, s)
     concluded = test.status == "concluded"
     rows = s.query(Payload).filter_by(test_id=test_id).all()
@@ -268,7 +268,7 @@ def execute_attack(
     test_id: str, x_token: str = Header(None), s: Session = Depends(db),
 ):
     """Broker only: red worker decrypts red, gateway infers, blue worker scores."""
-    team = team_of(test_id, x_token)
+    team = team_of(test_id, x_token, s)
     if team != "red":
         log(s, test_id, "ACCESS_DENIED", {"team": team, "reason": "only red executes attacks"})
         s.commit()
@@ -293,7 +293,7 @@ def execute_attack(
 def conclude_test(
     test_id: str, x_token: str = Header(None), s: Session = Depends(db),
 ):
-    team = team_of(test_id, x_token)
+    team = team_of(test_id, x_token, s)
     test = get_test(test_id, s)
     if test.status == "concluded":
         raise HTTPException(409, "This test is already concluded.")
@@ -345,7 +345,7 @@ def _replay_rows(rows, include_body: bool):
 @app.get("/tests/{test_id}/ledger")
 def get_ledger(test_id: str, x_token: str = Header(None), s: Session = Depends(db)):
     """Full hashes during the test. Event bodies stay redacted until conclude."""
-    team_of(test_id, x_token)
+    team_of(test_id, x_token, s)
     test = get_test(test_id, s)
     rows = s.query(Ledger).filter_by(test_id=test_id).order_by(Ledger.id).all()
     include_body = test.status == "concluded"
@@ -363,7 +363,7 @@ def get_ledger(test_id: str, x_token: str = Header(None), s: Session = Depends(d
 @app.get("/tests/{test_id}/ledger/export")
 def export_ledger(test_id: str, x_token: str = Header(None), s: Session = Depends(db)):
     """Canonical JSON for `python scripts/verify_ledger.py export.json`."""
-    team_of(test_id, x_token)
+    team_of(test_id, x_token, s)
     test = get_test(test_id, s)
     if test.status != "concluded":
         raise HTTPException(
@@ -380,6 +380,11 @@ def export_ledger(test_id: str, x_token: str = Header(None), s: Session = Depend
         "chain_valid": valid,
         "events": events,
     }
+
+
+@app.get("/health")
+def health():
+    return {"ok": True, "role": "broker"}
 
 
 @app.get("/tests")
@@ -402,7 +407,7 @@ def stats(
     if operator_ok(x_operator_token):
         scope_id = None
     else:
-        scope_id = test_id_of_token(x_token)
+        scope_id = test_id_of_token(x_token, s)
     q = s.query(Ledger).filter_by(event_type="FINDING")
     if scope_id:
         q = q.filter_by(test_id=scope_id)
@@ -412,5 +417,6 @@ def stats(
         f = json.loads(r.data)["data"]
         day = time.strftime("%Y-%m-%d", time.localtime(r.ts))
         per_day[day] = per_day.get(day, 0) + 1
-        outcomes[f["result"]] = outcomes.get(f["result"], 0) + 1
+        result = f.get("result") or "benign_or_unclear"
+        outcomes[result] = outcomes.get(result, 0) + 1
     return {"scope": scope_id or "all", "per_day": per_day, "outcomes": outcomes}

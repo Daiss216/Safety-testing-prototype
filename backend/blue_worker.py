@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import Base, SessionLocal, engine
+from database import SessionLocal, ensure_schema
 from internal import require_eval, require_internal
 from keys import key_for
 from models import Payload
@@ -16,7 +16,7 @@ from policy import score_reply
 TEAM = "blue"
 TEAM_SECRET = os.getenv("BAYORA_BLUE_SECRET", "")
 
-Base.metadata.create_all(engine)
+ensure_schema()
 app = FastAPI(title="Bayora blue worker")
 
 

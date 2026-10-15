@@ -111,7 +111,9 @@ export default function App() {
         method: "POST",
         body: JSON.stringify({ name }),
       });
-      leaveConsole();
+      setSession(null);
+      setPayload("");
+      setLedger(null);
       setHandoff({ testId: r.test_id });
       setRevealed(null);
       setIssued({});
@@ -139,20 +141,20 @@ export default function App() {
 
   function enterRevealed() {
     if (!handoff || !revealed) return;
+    const id = handoff.testId;
+    const chosen = revealed.team;
     setSession({
-      testId: handoff.testId,
-      team: revealed.team,
+      testId: id,
+      team: chosen,
       token: revealed.token,
     });
-    setHandoff(null);
     setRevealed(null);
-    setIssued({});
     setPayload("");
     setLedger(null);
     setOutput({
-      test_id: handoff.testId,
-      team: revealed.team,
-      note: `This session holds the ${revealed.team} token only.`,
+      test_id: id,
+      team: chosen,
+      note: `This session holds the ${chosen} token only. Leave console to issue the other team.`,
     });
   }
 
@@ -164,7 +166,7 @@ export default function App() {
       setError("Need a test id and that team's token.");
       return;
     }
-    setHandoff(null);
+    setHandoff({ testId: id });
     setSession({ testId: id, team: joinTeam, token: tok });
     setPayload("");
     setLedger(null);
@@ -303,14 +305,20 @@ export default function App() {
         </div>
       )}
 
-      {handoff && (
+      {handoff && !session && (
         <div className="card border-yellow-700 bg-yellow-950/30 space-y-3">
           <p className="text-sm">
             <b className="text-yellow-400">Handoff — test {handoff.testId}</b>
             <span className="text-slate-300">
               {" "}
+<<<<<<< HEAD
               Issue one team at a time. The API never returns both tokens in one
               response; this page never keeps more than one revealed token.
+=======
+              Issue one team at a time. After you enter a console, Leave
+              console to issue the other token. This page never keeps two
+              revealed tokens.
+>>>>>>> bf9c90e (All tested and maintained)
             </span>
           </p>
           <div className="flex flex-wrap gap-2">
@@ -535,7 +543,13 @@ export default function App() {
               {ledger.events.map((e) => (
                 <tr
                   key={e.seq}
-                  className={e.tampered ? "text-red-400" : "text-slate-300"}
+                  className={
+                    e.tampered
+                      ? "text-red-400"
+                      : e.type === "ACCESS_DENIED"
+                        ? "text-amber-400"
+                        : "text-slate-300"
+                  }
                 >
                   <td>{e.seq}</td>
                   <td>{e.type}</td>
