@@ -1,12 +1,33 @@
-# Bayora — Secure Adversarial AI Safety Testing Infrastructure
+# Bayora — Secure Adversarial AI Safety Testing Platform
 
 Bayora is a proof-of-concept platform for **red vs. blue** evaluation of LLM safety: red team submits attack prompts, blue team submits defenses, payloads stay **encrypted and team-isolated** until a test concludes, the backend alone talks to the **client LLM (Ollama)**, and every action is recorded in a **hash-chained, HMAC-signed audit ledger**.
 
-Shared red-team / blue-team / client-LLM sandbox where:
-- attack payloads & defenses are **sealed per-test** (Fernet, per-test key),
-- red cannot read blue and **blue cannot read red until the test concludes**,
-- the client LLM is reachable **only by the backend** (network isolation),
-- every action lands in a **SHA-256 hash-chained, HMAC-signed ledger**.
+> **Status:** Proof of concept (PoC). Do not treat this implementation as production-grade security without further review and testing.
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Project Structure](#structure)
+- [Technology Stack](#technology-stack)
+- [Run with Docker Compose](#run-with-docker)
+- [Run Locally](#local-dev)
+- [Features](#features)
+- [API Overview](#api-overview)
+- [Workflow](#demo-workflow)
+
+## Overview
+
+Bayora aims to provide a controlled environment in which:
+
+- **Red Team** submits adversarial prompts to test an LLM.
+- **Blue Team** submits defensive policies and evaluates model responses.
+- **Model Gateway** mediates requests to the model service.
+- **Backend/Broker** coordinates evaluations and enforces API access rules.
+- **Audit Ledger** records evaluation events and supports integrity verification.
+
+The goal is to reduce unauthorized cross-team access and make testing activity easier to inspect and reproduce.
+
+## Architecture
 
 ```
 ┌─────────────┐     HTTP :8000      ┌──────────────┐     internal      ┌─────────┐
@@ -18,8 +39,65 @@ Shared red-team / blue-team / client-LLM sandbox where:
                                     PostgreSQL or SQLite
 ```
 
----
-## Run (Docker, one command)
+## Structure
+```bash
+Bayora
+├── docker-compose.yml              # Multi-container local deployment
+├── README.md                       # Project documentation
+├── THREAT_MODEL.md                 # Threats, assumptions, and residual risks
+├── .gitignore                      # Files excluded from version control
+│
+├── backend/
+│   ├── Dockerfile                  # Backend/worker container image
+│   ├── requirements.txt            # Python dependencies
+│   ├── main.py                     # FastAPI broker and API endpoints
+│   ├── audit.py                    # Hash-chained audit entries and verification helpers
+│   ├── models.py                   # SQLAlchemy database models
+│   ├── database.py                 # Database engine and session setup
+│   ├── internal.py                 # Internal worker authentication helpers
+│   ├── keys.py                     # Team/test encryption key helpers
+│   ├── red_worker.py               # Red-team payload and execution service
+│   ├── blue_worker.py              # Blue-team payload and evaluation service
+│   ├── model_gateway.py             # Gateway between workers and Ollama
+│   ├── policy.py                   # Model-response evaluation/scoring rules
+│   └── seccomp-bayora.json         # Container syscall restrictions
+│
+├── frontend/
+│   ├── Dockerfile                  # Frontend build and web-server image
+│   ├── package.json                # JavaScript dependencies and scripts
+│   ├── package-lock.json           # Locked npm dependency versions
+│   ├── vite.config.js              # Vite configuration
+│   ├── tailwind.config.js          # Tailwind CSS configuration
+│   ├── postcss.config.js           # PostCSS configuration
+│   ├── index.html                  # HTML entry point
+│   ├── .env.example                # Example frontend environment configuration
+│   └── src/
+│       ├── main.jsx                # React application entry point
+│       ├── App.jsx                 # Bayora dashboard and API interactions
+│       └── index.css               # Global styles and UI component classes
+│
+└── scripts/
+    ├── network-isolation.sh        # Network isolation helper script
+    └── verify_ledger.py            # Audit ledger verification utility
+```
+
+## Technology Stack
+
+| Component | Technology | Purpose |
+|---|---|---|
+| Frontend | React, Vite | Interactive dashboard |
+| Styling | Tailwind CSS and custom CSS | Sketch-style monochrome interface |
+| Charts | Chart.js, `react-chartjs-2` | Findings and outcome visualizations |
+| API | Python, FastAPI | Request handling and access control |
+| Validation | Pydantic | Request-body validation |
+| Database layer | SQLAlchemy | Database models and queries |
+| Database | PostgreSQL | Persistent records in Docker deployment |
+| Encryption | Fernet | Encryption of stored team payloads |
+| Audit integrity | SHA-256 hash chain and HMAC signing (as implemented) | Detect changes to recorded audit entries |
+| LLM runtime | Ollama | Runs the model under test |
+| Deployment | Docker, Docker Compose | Service packaging and networking |
+
+## Run with Docker
 ```bash
 docker compose up --build
 # frontend  -> http://localhost:5173
@@ -28,7 +106,7 @@ docker compose up --build
 (The Ollama model downloads on first attack run; without it the backend
 uses a deterministic mock so the demo always works.)
 
-## Local dev (no Docker)
+## Local dev
 ```bash
 # backend
 cd backend && pip install -r requirements.txt && uvicorn main:app --reload
@@ -37,38 +115,6 @@ cd frontend && npm install && npm run dev
 ```
 Falls back to SQLite when DATABASE_URL is unset.
 
-## Structure
-```bash
-bayora/
-├── docker-compose.yml          # one-command local deployment (all 4 services)
-├── README.md                   # run instructions + 2-min judge demo script
-│
-├── backend/                    # Python FastAPI (the "security brain")
-│   ├── Dockerfile              # slim image, runs as non-root user
-│   ├── requirements.txt        # Python dependencies
-│   ├── main.py                 # all API endpoints + isolation logic
-│   ├── audit.py                # SHA-256 hash-chain + HMAC signing
-│   ├── models.py               # SQLAlchemy tables (tests, payloads, ledger)
-│   ├── database.py             # Postgres engine (SQLite fallback)
-│   └── seccomp-bayora.json     # syscall allow-list for container hardening
-│
-├── frontend/                   # React + Tailwind + Chart.js dashboard
-│   ├── Dockerfile              # multi-stage: build → serve via nginx
-│   ├── package.json            # npm dependencies
-│   ├── vite.config.js          # dev server config
-│   ├── tailwind.config.js      # Tailwind setup
-│   ├── postcss.config.js       # CSS pipeline
-│   ├── index.html              # HTML entry point
-│   ├── .env.example            # backend URL config
-│   └── src/
-│       ├── main.jsx            # React entry
-│       ├── App.jsx             # entire dashboard UI (single file)
-│       └── index.css           # Tailwind styles + component classes
-│
-├── scripts/
-     └── network-isolation.sh    # iptables deny-by-default tenant segmentation
-
-```
 ## Features
 
 | Area | What it does |
@@ -97,7 +143,7 @@ bayora/
 
 Interactive docs when the API is running: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-## Demo workflow (UI)
+## Demo workflow
 
 1. Click **+ New Evaluation** — save the red and blue tokens (shown once).
 2. Select **RED TEAM**, paste a jailbreak-style prompt, **Seal & Upload**.
