@@ -3,6 +3,7 @@ b-venv/
 backend/__pycache__/**/*
 backend/.env
 backend/ledger_ed25519.pem
+ledger_ed25519.pem
 
 frontend/node_modules/
 

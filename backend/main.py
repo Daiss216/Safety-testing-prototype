@@ -133,6 +133,8 @@ def log(s: Session, test_id: str, event_type: str, data: dict):
             data=body, signature=sig, ts=ts,
         )
     )
+    # autoflush is off: flush so a second log() in the same request chains to this entry.
+    s.flush()
 
 
 def worker_post(team: str, path: str, payload: dict, timeout: float = 30.0) -> dict:
