@@ -85,8 +85,22 @@ export default function App() {
     }
   }
 
+  // The other team may have concluded; ask the server instead of trusting local state.
+  async function refreshStatus(activeSession = session) {
+    if (!activeSession) return;
+    try {
+      const result = await api(`/tests/${activeSession.testId}/ledger`, {
+        token: activeSession.token,
+      });
+      setConcluded(result.status === "concluded");
+    } catch {
+      // Bad token or unknown test: the next action will surface the error.
+    }
+  }
+
   useEffect(() => {
     refreshStats();
+    refreshStatus();
     // Refresh when credentials / active session change.
   }, [session, operatorToken]);
 
@@ -102,6 +116,7 @@ export default function App() {
     } finally {
       setBusy(false);
       refreshStats();
+      refreshStatus();
     }
   }
 
