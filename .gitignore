@@ -2,5 +2,9 @@
 b-venv/
 backend/__pycache__/**/*
 backend/.env
+backend/ledger_ed25519.pem
 
 frontend/node_modules/
+
+backend/bayora.db
+backend/*.db
