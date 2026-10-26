@@ -2,6 +2,7 @@
 b-venv/
 backend/__pycache__/**/*
 backend/.env
+.env
 backend/ledger_ed25519.pem
 ledger_ed25519.pem
 
