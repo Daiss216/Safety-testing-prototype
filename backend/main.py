@@ -180,6 +180,8 @@ def create_test(
     ISSUED[test_id] = set()
     h, sig, ts, raw = make_entry(GENESIS, "TEST_CREATED", {"name": body.name})
     s.add(Test(id=test_id, name=body.name, created_at=ts, genesis_hash=h))
+    # No relationship() links these models, so flush the test row before its ledger FK.
+    s.flush()
     s.add(Ledger(
         test_id=test_id, prev_hash=GENESIS, hash=h, event_type="TEST_CREATED",
         data=raw, signature=sig, ts=ts,
