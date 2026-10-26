@@ -176,17 +176,27 @@ def create_test(
     _: None = Depends(require_operator),
 ):
     test_id = uuid.uuid4().hex[:12]
-    TOKENS[test_id] = {"red": uuid.uuid4().hex, "blue": uuid.uuid4().hex}
-    ISSUED[test_id] = set()
+    ts= time.time()
+
+    # evaluation
+    test= Test(id=test_id, name=body.name, created_at=ts, genesis_hash=GENESIS)
+    s.add(test)
+    s.commit()
+    s.refresh(test)
+
+    #Create the signed genesis audit event
     h, sig, ts, raw = make_entry(GENESIS, "TEST_CREATED", {"name": body.name})
-    s.add(Test(id=test_id, name=body.name, created_at=ts, genesis_hash=h))
-    # No relationship() links these models, so flush the test row before its ledger FK.
-    s.flush()
-    s.add(Ledger(
+    ledger_event= Ledger(
         test_id=test_id, prev_hash=GENESIS, hash=h, event_type="TEST_CREATED",
         data=raw, signature=sig, ts=ts,
-    ))
+    )
+    s.add(ledger_event)
     s.commit()
+
+    # Issue tokens in memory
+    TOKENS[test_id] = {"red": uuid.uuid4().hex, "blue": uuid.uuid4().hex}
+    ISSUED[test_id] = set()
+
     return {
         "test_id": test_id,
         "note": "Issue red and blue tokens separately via POST /tests/{id}/tokens. This response has neither.",

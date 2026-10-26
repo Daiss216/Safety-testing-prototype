@@ -33,7 +33,7 @@ services:
     environment:
       OLLAMA_HOST: http://ollama:11434
       BAYORA_MODEL: llama3.2:3b
-      BAYORA_GATEWAY_TOKEN: dev-gateway-change-me
+      BAYORA_GATEWAY_TOKEN: ${BAYORA_GATEWAY_TOKEN}
       BAYORA_FLUSH_EVERY_CALL: "0"
     depends_on: [ollama]
     networks: [llm, tenants]
