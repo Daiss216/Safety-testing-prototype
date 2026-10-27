@@ -339,17 +339,12 @@ export default function App() {
     <div className="relative w-full max-w-5xl mx-auto px-6 py-10 space-y-16">
       <header className="text-center">
         <h1 className="text-5xl font-extrabold tracking-widest mt-1">BAYORA_</h1>
-        <p className="mt-1 text-lg">
-          secure red/blue evaluation · PoC build{" "}
-          <span className="cursor">▮</span>
-        </p>
         <div className="dots mt-4" />
+        <p className="mx-auto mt-8 max-w-[46ch] text-xl md:text-2xl font-medium leading-snug">
+          Bayora makes adversarial AI testing structured, isolated, and
+          auditable — from attack prompt to verified result.
+        </p>
       </header>
-
-      <p className="text-center text-lg px-4">
-        red attacks. blue defends. isolated testing, with every move written to
-        a tamper-evident ledger.
-      </p>
 
       {!session && (
         <section className="sketch-box space-y-2">
@@ -645,9 +640,7 @@ export default function App() {
 
       <footer className="text-center space-y-1 pb-4">
         <div className="dots mb-3" />
-        <p className="text-xl">
-          isolation: separate workers · team keys · tamper-evident ledger
-        </p>
+        <p className="text-xl">Make every AI evaluation accountable</p>
         <p className="text-[15px]">
           bayora_poc | a secure adversarial AI testing broker |{" "}
           {new Date().getFullYear()}
