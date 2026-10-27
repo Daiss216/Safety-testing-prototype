@@ -93,41 +93,6 @@ body {
   padding: 0.5rem 0.8rem;
 }
 
-/* ---- hand-drawn buttons ---- */
-.sketch-btn {
-  font-family: var(--font);
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  border: 2.5px solid var(--ink);
-  border-radius: 12px 5px 13px 6px / 7px 13px 6px 14px;
-  background: #fff;
-  color: var(--text);
-  padding: 0.3rem 0.9rem;
-  cursor: pointer;
-  box-shadow: 3px 3px 0 var(--ink);
-  transition:
-    transform 0.07s,
-    box-shadow 0.07s;
-  user-select: none;
-}
-.sketch-btn:hover:not(:disabled) {
-  transform: translate(1px, 1px);
-  box-shadow: 2px 2px 0 var(--ink);
-}
-.sketch-btn:active:not(:disabled) {
-  transform: translate(3px, 3px);
-  box-shadow: 0 0 0 var(--ink);
-}
-.sketch-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-.sketch-btn.on {
-  background: var(--ink);
-  color: #fff;
-}
-
 /* ---- inputs & terminal ---- */
 .sketch-input {
   font-family: var(--font);

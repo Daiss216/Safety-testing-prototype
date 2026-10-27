@@ -11,6 +11,7 @@ import {
 } from "chart.js";
 import { AuroraBackground } from "@/components/ui/aurora-background";
 import GlyphPortal from "@/components/ui/glyph-portal";
+import { LiquidMetalButton } from "@/components/ui/liquid-metal-button";
 
 ChartJS.register(
   CategoryScale,
@@ -375,13 +376,11 @@ export default function App() {
       <section className="sketch-box">
         <p className="text-xl box-title">01 — Start an Evaluation</p>
         <div className="flex items-center gap-3 flex-wrap">
-          <button
-            className="sketch-btn"
+          <LiquidMetalButton
+            label="+ NEW EVALUATION"
             onClick={create}
             disabled={busy || !operatorToken.trim()}
-          >
-            + NEW EVALUATION
-          </button>
+          />
           {(handoff || session) && (
             <span className="sketch-box-sm">
               test: <b>{handoff?.testId || testId}</b>
@@ -397,20 +396,16 @@ export default function App() {
               Issue each token separately and give it only to its team.
             </p>
             <div className="flex gap-2 flex-wrap">
-              <button
-                className="sketch-btn"
+              <LiquidMetalButton
+                label={issued.red ? "RED ISSUED" : "ISSUE RED TOKEN"}
                 disabled={busy || issued.red}
                 onClick={() => issueTeam("red")}
-              >
-                {issued.red ? "RED ISSUED" : "ISSUE RED TOKEN"}
-              </button>
-              <button
-                className="sketch-btn"
+              />
+              <LiquidMetalButton
+                label={issued.blue ? "BLUE ISSUED" : "ISSUE BLUE TOKEN"}
                 disabled={busy || issued.blue}
                 onClick={() => issueTeam("blue")}
-              >
-                {issued.blue ? "BLUE ISSUED" : "ISSUE BLUE TOKEN"}
-              </button>
+              />
             </div>
             {revealed && (
               <div className="sketch-box-sm space-y-2">
@@ -422,12 +417,14 @@ export default function App() {
                   {revealed.token}
                 </code>
                 <div className="flex gap-2 flex-wrap">
-                  <button className="sketch-btn" onClick={copyToken}>
-                    {copied ? "COPIED" : "COPY TOKEN"}
-                  </button>
-                  <button className="sketch-btn" onClick={enterRevealed}>
-                    ENTER {revealed.team.toUpperCase()} CONSOLE
-                  </button>
+                  <LiquidMetalButton
+                    label={copied ? "COPIED" : "COPY TOKEN"}
+                    onClick={copyToken}
+                  />
+                  <LiquidMetalButton
+                    label={`ENTER ${revealed.team.toUpperCase()} CONSOLE`}
+                    onClick={enterRevealed}
+                  />
                 </div>
                 <p className="text-sm">
                   Copy before issuing another token; the previous token will no
@@ -465,9 +462,7 @@ export default function App() {
               value={joinToken}
               onChange={(e) => setJoinToken(e.target.value)}
             />
-            <button className="sketch-btn" type="submit">
-              JOIN CONSOLE
-            </button>
+            <LiquidMetalButton label="JOIN CONSOLE" type="submit" />
           </form>
         </section>
       )}
@@ -481,9 +476,7 @@ export default function App() {
                 test: <b>{testId}</b>
               </p>
             </div>
-            <button className="sketch-btn" onClick={leaveConsole}>
-              LEAVE CONSOLE
-            </button>
+            <LiquidMetalButton label="LEAVE CONSOLE" onClick={leaveConsole} />
           </div>
         </section>
       )}
@@ -509,41 +502,31 @@ export default function App() {
           disabled={!session || busy || concluded}
         />
         <div className="flex flex-wrap gap-2 mt-3">
-          <button
-            className="sketch-btn"
+          <LiquidMetalButton
+            label="SEAL"
             disabled={busy || !session || !payload.trim() || concluded}
             onClick={upload}
-          >
-            SEAL
-          </button>
-          <button
-            className="sketch-btn"
+          />
+          <LiquidMetalButton
+            label="EXECUTE"
             disabled={busy || !session || team !== "red" || concluded}
             onClick={execute}
-          >
-            EXECUTE
-          </button>
-          <button
-            className="sketch-btn"
+          />
+          <LiquidMetalButton
+            label="READ"
             disabled={busy || !session}
             onClick={read}
-          >
-            READ
-          </button>
-          <button
-            className="sketch-btn"
+          />
+          <LiquidMetalButton
+            label="CONCLUDE"
             disabled={busy || !session || concluded}
             onClick={conclude}
-          >
-            CONCLUDE
-          </button>
-          <button
-            className="sketch-btn"
+          />
+          <LiquidMetalButton
+            label="VERIFY LEDGER"
             disabled={busy || !session}
             onClick={verify}
-          >
-            VERIFY LEDGER
-          </button>
+          />
         </div>
         {err && (
           <p role="alert" className="mt-3 text-lg">
