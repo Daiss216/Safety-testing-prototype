@@ -2,13 +2,32 @@
 
 @import "tailwindcss";
 
-:root {
-  --ink: #111111;
-  --paper: #ffffff;
+/* aurora drift used by components/ui/aurora-background.jsx */
+@theme {
+  --animate-aurora: aurora 60s linear infinite;
+
+  @keyframes aurora {
+    from {
+      background-position:
+        50% 50%,
+        50% 50%;
+    }
+    to {
+      background-position:
+        350% 50%,
+        350% 50%;
+    }
+  }
 }
 
+:root {
+  --ink: #111111;
+  --paper: #fafafa;
+}
+
+/* the page backdrop itself is <AuroraBackground> in App.jsx */
 body {
-  background: var(--paper);
+  background-color: var(--paper);
   color: var(--ink);
   font-family: "VT323", monospace;
   font-size: 19px;
@@ -19,20 +38,51 @@ body {
   font-family: "Caveat", cursive;
 }
 
-/* ---- hand-drawn boxes: wobbly radius + hard offset shadow ---- */
+/* ---- ink-ruled boxes: rough frame + left margin line, paper shows through ---- */
+/* #rough-ink is the inline SVG filter in index.html that roughens the strokes. */
 .sketch-box {
+  position: relative;
+  background: transparent;
+  padding: 1.75rem 2.25rem 2rem 2.9rem;
+}
+.sketch-box::before,
+.sketch-box::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  filter: url(#rough-ink);
+}
+.sketch-box::before {
+  inset: 0;
   border: 2.5px solid var(--ink);
-  border-radius: 16px 6px 18px 8px / 9px 17px 7px 19px;
-  background: #fff;
-  box-shadow: 5px 5px 0 var(--ink);
-  padding: 1rem 1.1rem;
+}
+.sketch-box::after {
+  top: 0;
+  bottom: 0;
+  left: 9px;
+  border-left: 1.5px solid var(--ink);
+}
+
+/* heading row: ruled off from the box body */
+.box-title {
+  position: relative;
+  padding-bottom: 1rem;
+  margin-bottom: 1.5rem;
+}
+.box-title::after {
+  content: "";
+  position: absolute;
+  left: calc(-2.9rem + 9px);
+  right: -2.25rem;
+  bottom: 0;
+  border-bottom: 2px solid var(--ink);
+  filter: url(#rough-ink);
 }
 
 .sketch-box-sm {
-  border: 2px solid var(--ink);
-  border-radius: 12px 5px 13px 6px / 7px 13px 6px 14px;
-  background: #fff;
-  box-shadow: 3px 3px 0 var(--ink);
+  border: 2.5px solid var(--ink);
+  border-radius: 18px;
+  background: transparent;
   padding: 0.5rem 0.8rem;
 }
 
