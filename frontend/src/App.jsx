@@ -9,6 +9,7 @@ import {
   Tooltip,
   Legend,
 } from "chart.js";
+import { AuroraBackground } from "@/components/ui/aurora-background";
 
 ChartJS.register(
   CategoryScale,
@@ -257,7 +258,8 @@ export default function App() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto p-6 space-y-8">
+    <AuroraBackground className="h-auto min-h-screen items-stretch justify-start">
+    <div className="relative w-full max-w-5xl mx-auto px-6 py-10 space-y-16">
       <header className="text-center">
         <h1 className="text-5xl tracking-widest mt-1">BAYORA_</h1>
         <p className="mt-1 text-lg">
@@ -274,7 +276,7 @@ export default function App() {
 
       {!session && (
         <section className="sketch-box space-y-2">
-          <p className="text-xl mb-2">00 — Operator Access</p>
+          <p className="text-xl box-title">00 — Operator Access</p>
           <label htmlFor="operator-token" className="block">
             Operator token
           </label>
@@ -295,7 +297,7 @@ export default function App() {
       )}
 
       <section className="sketch-box">
-        <p className="text-xl mb-2">01 — Start an Evaluation</p>
+        <p className="text-xl box-title">01 — Start an Evaluation</p>
         <div className="flex items-center gap-3 flex-wrap">
           <button
             className="sketch-btn"
@@ -363,7 +365,7 @@ export default function App() {
 
       {!session && (
         <section className="sketch-box">
-          <p className="text-xl mb-2">Join an Existing Evaluation</p>
+          <p className="text-xl box-title">Join an Existing Evaluation</p>
           <form className="space-y-2" onSubmit={joinTest}>
             <input
               className="sketch-input w-full"
@@ -411,7 +413,7 @@ export default function App() {
       )}
 
       <section className="sketch-box">
-        <p className="text-xl mb-2">02 — Attack Console</p>
+        <p className="text-xl box-title">02 — Attack Console</p>
         <p className="mb-3 text-lg">
           {session
             ? `${team.toUpperCase()} TEAM · ${concluded ? "CONCLUDED" : "ACTIVE"}`
@@ -478,7 +480,7 @@ export default function App() {
       </section>
 
       <section className="sketch-box">
-        <p className="text-xl mb-2">03 — Findings</p>
+        <p className="text-xl box-title">03 — Findings</p>
         {stats && Object.keys(stats.per_day || {}).length > 0 ? (
           <div className="grid sm:grid-cols-2 gap-6">
             <div>
@@ -551,7 +553,7 @@ export default function App() {
 
       {ledger && (
         <section className="sketch-box">
-          <p className="text-xl mb-2">04 — Audit Ledger</p>
+          <p className="text-xl box-title">04 — Audit Ledger</p>
           <p className="text-lg mb-2">
             {ledger.chain_valid
               ? "✔ chain intact — audit verified"
@@ -593,5 +595,6 @@ export default function App() {
         </p>
       </footer>
     </div>
+    </AuroraBackground>
   );
 }
