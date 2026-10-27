@@ -10,6 +10,7 @@ import {
   Legend,
 } from "chart.js";
 import { AuroraBackground } from "@/components/ui/aurora-background";
+import GlyphPortal from "@/components/ui/glyph-portal";
 
 ChartJS.register(
   CategoryScale,
@@ -26,6 +27,42 @@ const MONO = {
   defended: "#777777",
   benign_or_unclear: "#cccccc",
 };
+const PORTAL_FONT = '"Plus Jakarta Sans", Arial, sans-serif';
+const FALLBACK_FONT = "Arial, sans-serif";
+// Portal field in the aurora's blues (Tailwind blue-300/600/800/900, violet-200),
+// dark enough in the middle (blue-600) to keep the white copy readable.
+const PORTAL_BLUE = "#1e40af";
+const PORTAL_FIELD = [
+  "radial-gradient(circle at 18% 8%, rgba(147,197,253,.55), transparent 34%)",
+  "radial-gradient(circle at 82% 20%, rgba(221,214,254,.25), transparent 28%)",
+  "radial-gradient(circle at 48% 78%, rgba(30,58,138,.5), transparent 44%)",
+  "linear-gradient(135deg, #1e40af 0%, #2563eb 48%, #1e3a8a 100%)",
+].join(", ");
+
+// GlyphPortal freezes whichever face is ready when it mounts (and stays static
+// if one is still pending), so hold it back until Plus Jakarta Sans loads.
+function usePortalFont() {
+  const [face, setFace] = useState(null);
+  useEffect(() => {
+    let settled = false;
+    const finish = (value) => {
+      if (!settled) {
+        settled = true;
+        setFace(value);
+      }
+    };
+    const timeout = window.setTimeout(() => finish(FALLBACK_FONT), 1600);
+    document.fonts.load('800 100px "Plus Jakarta Sans"', "BAYORA").then(
+      (faces) => finish(faces.length ? PORTAL_FONT : FALLBACK_FONT),
+      () => finish(FALLBACK_FONT),
+    );
+    return () => {
+      settled = true;
+      clearTimeout(timeout);
+    };
+  }, []);
+  return face;
+}
 
 async function api(path, { token = "", operatorToken = "", ...options } = {}) {
   const response = await fetch(`${API}${path}`, {
@@ -65,6 +102,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [concluded, setConcluded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const portalFont = usePortalFont();
 
   const testId = session?.testId || "";
   const team = session?.team || "";
@@ -258,10 +296,48 @@ export default function App() {
   }
 
   return (
-    <AuroraBackground className="h-auto min-h-screen items-stretch justify-start">
+    <AuroraBackground className="h-auto min-h-screen items-stretch justify-start text-blue-900">
+      {portalFont ? (
+        <GlyphPortal
+          word="BAYORA"
+          className="bayora-portal"
+          fontFamily={portalFont}
+          fontWeight={800}
+          scrollLength={2.4}
+          enterLabel="Enter console"
+          style={{
+            fontFamily: portalFont,
+            "--gp-paper": "transparent",
+            "--gp-ink": "var(--text)",
+            "--gp-field": PORTAL_BLUE,
+          }}
+          background={
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                transform: "scale(var(--gp-field-scale,1))",
+                background: PORTAL_FIELD,
+              }}
+            />
+          }
+        >
+          <div className="w-full max-w-5xl mx-auto">
+            <h2 className="text-4xl md:text-6xl font-extrabold tracking-tight max-w-[14ch]">
+              Red attacks. Blue defends.
+            </h2>
+            <p className="mt-6 max-w-[42ch] text-lg md:text-xl text-white/85">
+              Every payload sealed per team, every move written to a
+              tamper-evident ledger. The evaluation console is right below.
+            </p>
+          </div>
+        </GlyphPortal>
+      ) : (
+        <div className="h-svh" aria-hidden="true" />
+      )}
     <div className="relative w-full max-w-5xl mx-auto px-6 py-10 space-y-16">
       <header className="text-center">
-        <h1 className="text-5xl tracking-widest mt-1">BAYORA_</h1>
+        <h1 className="text-5xl font-extrabold tracking-widest mt-1">BAYORA_</h1>
         <p className="mt-1 text-lg">
           secure red/blue evaluation · PoC build{" "}
           <span className="cursor">▮</span>
@@ -502,15 +578,15 @@ export default function App() {
                     x: {
                       grid: { display: false },
                       ticks: {
-                        color: "#111",
-                        font: { family: "VT323", size: 15 },
+                        color: "#1e3a8a",
+                        font: { family: "Plus Jakarta Sans", size: 12 },
                       },
                     },
                     y: {
                       grid: { color: "#ddd" },
                       ticks: {
-                        color: "#111",
-                        font: { family: "VT323", size: 15 },
+                        color: "#1e3a8a",
+                        font: { family: "Plus Jakarta Sans", size: 12 },
                       },
                     },
                   },
@@ -537,8 +613,8 @@ export default function App() {
                     legend: {
                       position: "bottom",
                       labels: {
-                        color: "#111",
-                        font: { family: "VT323", size: 15 },
+                        color: "#1e3a8a",
+                        font: { family: "Plus Jakarta Sans", size: 12 },
                       },
                     },
                   },
